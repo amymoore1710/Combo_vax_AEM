@@ -1,0 +1,484 @@
+---
+title: "Supplementary Tables and Figures"
+format:
+  pdf:
+    documentclass: article
+    toc: false
+    number-sections: false
+    fontsize: 10pt
+    geometry: "landscape, left=0.75cm, right=0.75cm, top=0.75cm, bottom=1.5cm"
+    include-in-header:
+      text: |
+        \usepackage{booktabs}
+        \usepackage{array}
+        \usepackage{makecell}
+        \usepackage{float}
+        \usepackage{caption}
+        \usepackage{tocloft}
+        \usepackage{threeparttable}
+        \usepackage{tikz}
+        \captionsetup[table]{labelformat=empty, skip=6pt}
+        \setlength{\cfttabindent}{0pt}
+        \setlength{\cfttabnumwidth}{0pt}
+        \renewcommand{\listtablename}{Table of Contents}
+        \AtBeginDocument{\addtocontents{lot}{\protect\renewcommand{\protect\numberline}[1]{}}}
+        \setlength{\cftbeforetabskip}{8pt}
+        \newcommand{\tbr}{\\}
+        \newcommand{\pct}{\%}
+---
+
+```{r setup}
+#| include: false
+
+pacman::p_load(dplyr, tidyr, scales, purrr, stringr, here, knitr, kableExtra)
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+ss.df     <- readRDS(here::here("clean data", "sens_spec_results.RDS"))
+inc_df    <- readRDS(here::here("clean data", "inc_results3.RDS"))
+risk_df   <- readRDS(here::here("clean data", "risk_results3.RDS"))
+ve_df     <- readRDS(here::here("clean data", "ve_results3.RDS"))
+sample.df <- readRDS(here::here("clean data", "sample_sizes3.RDS"))
+sample.total.df <- readRDS(here::here("clean data", "sample_sizes3_comparison.RDS"))
+
+# ── Label updates ─────────────────────────────────────────────────────────────
+datasets <- c("ss.df", "inc_df", "risk_df", "ve_df", "sample.df", "sample.total.df")
+for (d in datasets) {
+  temp <- get(d)
+  temp$severity[temp$severity == "MAL-ED Score >=6"] <- "Score-based MSD"
+  temp$severity[temp$severity == "GEMS MSD"] <- "Criteria-based MSD"
+  if ("endpoint" %in% names(temp))
+    temp$endpoint <- gsub("Endpoint Culture", "Endpoint 5", temp$endpoint)
+  assign(d, temp)
+}
+
+# ── Scenario factor labels ─────────────────────────────────────────────────────
+dfs <- list(ss.df, inc_df, risk_df, ve_df, sample.df, sample.total.df)
+dfs <- map(dfs, ~ .x %>%
+  mutate(scenario = factor(scenario,
+    levels = c("Main","VE.inf0.0","VE.inf0.2","VE.dis0.3","VE.dis0.5",
+               "VE.sev0.0","VE.sev0.3","VE.ct0.0","VE.ct0.2"),
+    labels = c("Main","VEinf = 0%","VEinf = 20%","VEdis = 30%","VEdis = 50%",
+               "VEmsd = 40%","VEmsd = 80%",
+               "0% reduction in pathogen quantity",
+               "20% reduction in pathogen quantity"))))
+ss.df <- dfs[[1]]; inc_df <- dfs[[2]]; risk_df <- dfs[[3]]
+ve_df  <- dfs[[4]]; sample.df <- dfs[[5]]; sample.total.df <- dfs[[6]]
+
+# ── Build tables ──────────────────────────────────────────────────────────────
+# ── CI values use \makecell{est\pct{}\tbr{}(lo, hi)} so the 95% SI appears
+# on a separate line. \pct{} and \tbr{} are preamble macros safe through pandoc.
+
+# Helper: two-line CI cell value
+ci_val <- function(mn, lo, hi)
+  paste0("\\makecell{", sprintf("%.1f", 100*mn), "\\pct{}\\tbr{}(",
+         sprintf("%.1f", 100*lo), ", ", sprintf("%.1f", 100*hi), ")}")
+
+# Helper: format a numeric value (proportion, e.g. 0.233) as "23.3%", and for
+# every non-Main scenario append the difference vs. the Main scenario for the
+# same severity/endpoint, e.g. "22.2% (-1.1%)". The Main row itself just shows
+# its value with no parenthetical (nothing to compare it to).
+# Input df must have columns: severity, scenario, endpoint, val
+fmt_val_vs_main <- function(df) {
+  main_vals <- df %>%
+    filter(as.character(scenario) == "Main") %>%
+    select(severity, endpoint, main_val = val)
+
+  df %>%
+    left_join(main_vals, by = c("severity", "endpoint")) %>%
+    mutate(
+      diff  = 100 * (val - main_val),
+      range = if_else(
+        as.character(scenario) == "Main",
+        paste0(sprintf("%.1f", 100 * val), "%"),
+        paste0(sprintf("%.1f", 100 * val), "% (",
+               ifelse(diff >= 0, "+", ""),
+               sprintf("%.1f", diff), "%)")
+      )
+    ) %>%
+    select(-main_val, -diff)
+}
+
+# Helper: assign scenario group and abbreviated label for Tables 4-6
+add_scenario_labels <- function(df) {
+  df %>% mutate(
+    scenario_group = factor(case_when(
+      as.character(scenario) == "Main"       ~ "Main",
+      grepl("VEinf", as.character(scenario)) ~ "VE against infection",
+      grepl("VEdis", as.character(scenario)) ~ "VE against disease",
+      grepl("VEmsd", as.character(scenario)) ~ "Target VE against MSD",
+      TRUE                                   ~ "Reduction in pathogen quantity"),
+      levels = c("Main", "VE against infection", "VE against disease",
+                 "Target VE against MSD", "Reduction in pathogen quantity")),
+    # Abbreviated scenario label (group header provides context)
+    scenario_short = case_when(
+      as.character(scenario) == "Main"        ~ "Main",
+      grepl("= 0%",  as.character(scenario))  ~ "0%",
+      grepl("= 20%", as.character(scenario))  ~ "20%",
+      grepl("= 30%", as.character(scenario))  ~ "30%",
+      grepl("= 50%", as.character(scenario))  ~ "50%",
+      grepl("= 40%", as.character(scenario))  ~ "40%",
+      grepl("= 80%", as.character(scenario))  ~ "80%",
+      grepl("^0%",   as.character(scenario))  ~ "0%",
+      grepl("^20%",  as.character(scenario))  ~ "20%",
+      TRUE ~ as.character(scenario)
+    )
+  )
+}
+
+# Tables 1A & 1B: sensitivity / specificity (main scenario), two-line CI values
+make_ss_tbl <- function(m) {
+  ss.df %>%
+    filter(scenario == "Main", measure == m) %>%
+    mutate(val = ci_val(mean, lower, upper)) %>%
+    select(severity, country_id, endpoint, val) %>%
+    distinct() %>% arrange(severity, country_id, endpoint) %>%
+    pivot_wider(names_from = "endpoint", values_from = "val")
+}
+main.ss.sens.tbl <- make_ss_tbl("Sensitivity")
+main.ss.spec.tbl <- make_ss_tbl("Specificity")
+
+# Table 2: True VE (single line) and Observed VE (two-line CI)
+main.ve.tbl <- ve_df %>%
+  filter(scenario == "Main") %>%
+  filter(measure == "Observed VE" |
+           (measure == "True VE" & grepl("^Endpoint 1:", endpoint))) %>%
+  mutate(endpoint = ifelse(measure == "True VE" & grepl("^Endpoint 1:", endpoint),
+                           "AATrue VE", endpoint)) %>%
+  mutate(val = ifelse(endpoint == "AATrue VE",
+    paste0("\\makecell{", sprintf("%.1f", 100*mean), "\\pct{}}"),
+    ci_val(mean, lower, upper))) %>%
+  select(severity, country_id, endpoint, val) %>%
+  distinct() %>% arrange(severity, country_id, endpoint) %>%
+  pivot_wider(names_from = "endpoint", values_from = "val",
+              names_sep = "|||") |>
+  rename(`True VE` = `AATrue VE`)
+
+# Table 3: VE bias (two-line CI values)
+main.ve.bias.tbl <- ve_df %>%
+  filter(scenario == "Main", measure == "VE Bias") %>%
+  mutate(val = ci_val(mean, lower, upper)) %>%
+  select(severity, country_id, endpoint, val) %>%
+  distinct() %>% arrange(severity, country_id, endpoint) %>%
+  pivot_wider(names_from = "endpoint", values_from = "val")
+
+# Tables 4A & 4B: sens/spec ranges — severity column, scenario group headers
+make_ss_range_tbl <- function(m) {
+  ss.df %>%
+    filter(measure == m, country_id == "All Sites") %>%
+    group_by(severity, scenario, endpoint) %>%
+    summarise(val = min(mean), .groups = "drop") %>%
+    fmt_val_vs_main() %>%
+    select(severity, scenario, endpoint, range) %>%
+    add_scenario_labels() %>%
+    arrange(severity, scenario_group, scenario, endpoint) %>%
+    pivot_wider(names_from = "endpoint", values_from = "range") %>%
+    select(severity, scenario_group, scenario_short, everything()) |> 
+  ungroup() |> 
+  select(-scenario)
+}
+ss.sens.tbl <- make_ss_range_tbl("Sensitivity")
+ss.spec.tbl <- make_ss_range_tbl("Specificity")
+
+# Table 5: VE bias ranges — severity column, scenario group headers
+ve.bias.tbl <- ve_df %>%
+  filter(measure == "VE Bias", country_id == "All Sites") %>%
+  group_by(severity, scenario, endpoint) %>%
+  summarise(val = min(mean), .groups = "drop") %>%
+  fmt_val_vs_main() %>%
+  select(severity, scenario, endpoint, range) %>%
+  add_scenario_labels() %>%
+  arrange(severity, scenario_group, scenario, endpoint) %>%
+  pivot_wider(names_from = "endpoint", values_from = "range") %>%
+  select(severity, scenario_group, scenario_short, everything()) |> 
+  ungroup() |> 
+  select(-scenario)
+
+# Table 6: sample size % differences — severity column, scenario group headers
+sample.tbl <- sample.total.df %>%
+  group_by(scenario) %>%
+  mutate(min_n    = min(ntotal_sum_of_sites),
+         pct_diff = (ntotal_sum_of_sites - min_n) / ((ntotal_sum_of_sites + min_n) / 2)) %>%
+  group_by(severity, scenario, endpoint) %>%
+  mutate(range = paste0(sprintf("%.1f", 100*min(pct_diff)),"%")) %>%
+  select(severity, scenario, endpoint, range) %>%
+  distinct() %>%
+  add_scenario_labels() %>%
+  arrange(severity, scenario_group, scenario) %>%
+  pivot_wider(names_from = "endpoint", values_from = "range") %>%
+  select(severity, scenario_group, scenario_short, everything()) |> 
+  ungroup() |> 
+  select(-scenario)
+
+# ── Formatting helpers ────────────────────────────────────────────────────────
+
+# Convert endpoint name to \makecell{} with logical line breaks.
+# Uses \tbr{} (defined in preamble as \\) instead of \\ directly, so
+# pandoc never sees the double-backslash and cannot mangle it.
+format_ep <- function(ep_name) {
+  ep <- trimws(gsub("  +", " ", gsub("[\n]", " ", ep_name)))
+  ep <- sub("(Endpoint [^:]+:) +", "\\1\n", ep)
+  ep <- gsub("no ", "no\n", ep)
+  lines <- strsplit(ep, "\n")[[1]]
+  paste0("\\makecell{", paste(lines, collapse = "\\tbr{}"), "}")
+}
+
+# Escape % -> \pct{} in all character/factor columns.
+# Uses \pct{} (defined in preamble as \%) instead of \% directly, so
+# pandoc cannot convert \% back to a bare % (LaTeX comment character).
+esc <- function(df) {
+  as.data.frame(lapply(df, function(col) {
+    if (is.character(col) || is.factor(col))
+      gsub("%", "\\pct{}", as.character(col), fixed = TRUE)
+    else col
+  }), check.names = FALSE, stringsAsFactors = FALSE)
+}
+
+id_label <- function(col) switch(col,
+  country_id = "Country", scenario = "Vaccine Scenario",
+  severity = "Severity", col)
+
+# Standard landscape kable — pack_rows on id_cols[1], displays id_cols[-1].
+# id_col_widths: named list e.g. list("1"="2cm","2"="1cm") for column widths.
+make_ep_kable <- function(df, id_cols, caption, footnote, fontsize = 9,
+                           id_col_widths = NULL, footnote_escape = TRUE) {
+  ep_cols    <- setdiff(names(df), id_cols)
+  ep_latex   <- sapply(ep_cols, format_ep, USE.NAMES = FALSE)
+  grp_rle    <- rle(as.character(df[[id_cols[1]]]))
+  display_df <- esc(df[, c(id_cols[-1], ep_cols), drop = FALSE])
+  id_disp    <- sapply(id_cols[-1], id_label, USE.NAMES = FALSE)
+
+  k <- kable(display_df, format = "latex", booktabs = TRUE,
+             caption = caption, col.names = c(id_disp, ep_latex),
+             linesep = "", escape = FALSE) %>%
+    kable_styling(latex_options = c("scale_down", "HOLD_position"),
+              font_size = fontsize, full_width = FALSE)
+
+  if (!is.null(id_col_widths))
+    for (nm in names(id_col_widths))
+      k <- column_spec(k, as.integer(nm), width = id_col_widths[[nm]])
+
+  row_start <- 1L
+  for (i in seq_along(grp_rle$lengths)) {
+    k <- pack_rows(k, grp_rle$values[i], row_start,
+                   row_start + grp_rle$lengths[i] - 1L,
+                   bold = TRUE, hline_before = TRUE, escape = TRUE)
+    row_start <- row_start + grp_rle$lengths[i]
+  }
+
+  k <- footnote(k,
+                general = footnote,
+                general_title = "",
+                footnote_as_chunk = TRUE,
+                threeparttable = TRUE,
+                escape = footnote_escape)
+
+  k
+}
+
+# Specialist kable for Tables 4-6.
+# Layout (matching old supplement):
+#   - TWO id columns: severity (collapsed to show once per block via
+#     collapse_rows) and vaccine scenario.
+#   - Scenario group categories (VE against infection, etc.) are inserted as
+#     explicit bold rows in the scenario column, with blank endpoint cells.
+#   - Individual scenario values (0%, 20%, …) appear as plain rows below.
+#   - collapse_rows() on column 1 produces the merged "All diarrhea" cell.
+make_scenario_kable <- function(df, caption, footnote, fontsize = 9,
+                                footnote_escape = TRUE) {
+  ep_cols  <- setdiff(names(df), c("severity", "scenario_group", "scenario_short"))
+  ep_latex <- sapply(ep_cols, format_ep, USE.NAMES = FALSE)
+
+  # Build display dataframe: insert a header row before each non-Main group
+  rows_out <- list()
+  is_hdr   <- logical(0)
+
+  for (sev in unique(df$severity)) {
+    sev_df  <- df[df$severity == sev, ]
+    grp_rle <- rle(as.character(sev_df$scenario_group))
+    ptr     <- 1L
+
+    for (g in seq_along(grp_rle$lengths)) {
+      n         <- grp_rle$lengths[g]
+      grp_label <- grp_rle$values[g]
+
+      if (grp_label != "Main") {
+        # Header row: severity + group label, blank endpoint cells
+        hdr <- data.frame(severity = sev, scenario_short = grp_label,
+                          stringsAsFactors = FALSE)
+        for (ep in ep_cols) hdr[[ep]] <- ""
+        rows_out <- c(rows_out, list(hdr))
+        is_hdr   <- c(is_hdr, TRUE)
+      }
+
+      data_part <- sev_df[ptr:(ptr + n - 1L),
+                          c("severity", "scenario_short", ep_cols),
+                          drop = FALSE]
+      rows_out <- c(rows_out, list(data_part))
+      is_hdr   <- c(is_hdr, rep(FALSE, n))
+      ptr      <- ptr + n
+    }
+  }
+
+  disp_df   <- esc(do.call(rbind, rows_out))
+  col_names <- c("Severity", "Vaccine Scenario", ep_latex)
+  hdr_rows  <- which(is_hdr)
+
+  k <- kable(disp_df, format = "latex", booktabs = TRUE,
+             caption = caption, col.names = col_names,
+             linesep = "", escape = FALSE) %>%
+    kable_styling(latex_options = c("scale_down", "HOLD_position"),
+              font_size = fontsize, full_width = FALSE) %>%
+    column_spec(1, width = "1.5cm") %>%
+    column_spec(2, width = "4cm") %>%
+    column_spec(3:ncol(disp_df), latex_column_spec = "c") %>%
+    collapse_rows(columns = 1, latex_hline = "major", valign = "middle")
+
+  for (r in hdr_rows)
+    k <- row_spec(k, r, bold = TRUE)
+
+  k <- footnote(k,
+                general = footnote,
+                general_title = "",
+                footnote_as_chunk = TRUE,
+                threeparttable = TRUE,
+                escape = footnote_escape)
+
+  k
+}
+```
+
+\listoftables
+
+\clearpage
+
+```{=latex}
+\setlength{\tabcolsep}{4pt}
+```
+
+```{r tbl1a}
+#| echo: false
+make_ep_kable(
+  df      = main.ss.sens.tbl,
+  id_cols = c("severity", "country_id"),
+  caption = paste0(
+    "Supplementary Table 1A. Sensitivity of each proposed endpoint to distinguish ",
+    "true Shigella diarrhea of any severity (all diarrhea), criteria-based MSD, ",
+    "and score-based MSD."),
+  footnote = paste0("Values are mean (95% simulation interval) across countries for the main ",
+    "vaccine scenario."),
+  fontsize = 9
+)
+```
+
+\clearpage
+
+```{r tbl1b}
+#| echo: false
+make_ep_kable(
+  df      = main.ss.spec.tbl,
+  id_cols = c("severity", "country_id"),
+  caption = paste0(
+    "Supplementary Table 1B. Specificity of each proposed endpoint to distinguish ",
+    "true Shigella diarrhea of any severity (all diarrhea), criteria-based MSD, ",
+    "and score-based MSD."),
+  footnote = paste0("Values are mean (95% simulation interval) across countries for the main ",
+    "vaccine scenario."),
+  fontsize = 9
+)
+```
+
+\newpage
+
+```{r tbl2}
+#| echo: false
+make_ep_kable(
+  df      = main.ve.tbl,
+  id_cols = c("severity", "country_id"),
+  caption = paste0(
+    "Supplementary Table 2. True and observed vaccine efficacy (VE) when estimated ",
+    "using each endpoint, for Shigella diarrhea of any severity (all diarrhea), ",
+    "criteria-based MSD, and score-based MSD"),
+  footnote = paste0("Observed VE is ",
+    "mean (95% simulation interval). Main vaccine scenario."),
+  fontsize = 9
+)
+```
+
+\newpage
+
+```{r tbl3}
+#| echo: false
+make_ep_kable(
+  df      = main.ve.bias.tbl,
+  id_cols = c("severity", "country_id"),
+  caption = paste0(
+    "Supplementary Table 3. Bias in observed VE for Shigella diarrhea of any ",
+    "severity (all diarrhea), criteria-based MSD, and score-based MSD when using different trial ",
+    "endpoints."),
+  footnote = paste0("Bias is measured as the absolute difference between observed and ",
+    "true VE. Values are mean (95% simulation interval). Main vaccine scenario."),
+  fontsize = 9
+)
+```
+
+\newpage
+
+```{r tbl4a}
+#| echo: false
+make_scenario_kable(
+  df      = ss.sens.tbl,
+  caption = paste0(
+    "Supplementary Table 4A. Sensitivity across all sites comparing ",
+    "the main vaccine scenario to varying each vaccine effect to higher and lower ",
+    "values than those in the main scenario."),
+  footnote = "Each cell shows the sensitivity for a given scenario and endpoint, and in parentheses the absolute difference in sensitivity compared to the Main scenario for that endpoint.",
+  fontsize = 9
+)
+```
+
+\newpage
+
+```{r tbl4b}
+#| echo: false
+make_scenario_kable(
+  df      = ss.spec.tbl,
+  caption = paste0(
+    "Supplementary Table 4B. Specificity across all sites comparing ",
+    "the main vaccine scenario to varying each vaccine effect to higher and lower ",
+    "values than those in the main scenario."),
+  footnote = "Each cell shows the specificity for a given scenario and endpoint, and in parentheses the absolute difference in specificity compared to the Main scenario for that endpoint.",
+  fontsize = 9
+)
+```
+
+\newpage
+
+```{r tbl5}
+#| echo: false
+make_scenario_kable(
+  df      = ve.bias.tbl,
+  caption = paste0(
+    "Supplementary Table 5. Mean bias in observed VE across all sites, ",
+    "comparing the main vaccine scenario to varying each vaccine effect to higher ",
+    "and lower values than those in the main scenario."),
+  footnote = "Bias is measured as the absolute difference between observed and true VE. Each cell shows the bias for a given scenario and endpoint, and in parentheses the absolute difference in bias (or in observed VE) compared to the Main scenario for that endpoint.",
+  fontsize = 9
+)
+```
+
+\newpage
+
+```{r tbl6}
+#| echo: false
+make_scenario_kable(
+  df      = sample.tbl,
+  caption = paste0(
+    "Supplementary Table 6. Percent difference in required trial size ",
+    "across all sites relative to the smallest trial size within each vaccine ",
+    "scenario, to detect an average difference in observed Shigella diarrhea risk ",
+    "between vaccine and placebo groups with 80\\% power."),
+  footnote = paste0("Percent difference is calculated as $(n - n_{min}) / ((n + n_{min}) / 2)$, where $n_{min}$ is the smallest sample size across endpoints and disease outcomes (all diarrhea, critera-based MSD, score-based MSD) within each scenario. Trial sizes assume every Shigella diarrhea episode defined by each endpoint is detected."),
+  fontsize = 9,
+  footnote_escape = FALSE
+)
+```
