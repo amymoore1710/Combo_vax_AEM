@@ -9,6 +9,55 @@ tac <- read_csv(here::here("maled data/Tac_Sep2018.csv"))
 load(here::here("maled data","shigella_specimen.RData")) 
 load(here::here("maled data","new_shigella_cause.RData"))
 
+#Mutating Shigella Cause to categorize into shigella, ETEC, or other (adding ETEC as a category)
+
+IDs <- unique(shig.cause$sid)
+shig.cause_modified <- tac %>% filter(sid %in% IDs)  %>% 
+  mutate(other_afe = pmax(adenovirus_40_41_afe, astrovirus_afe,
+                          campylobacter_jejuni_coli_afe, cryptosporidium_afe,
+                          norovirus_gii_afe, rotavirus_afe, sapovirus_afe, tEPEC_afe, 
+                          na.rm = TRUE)) %>%
+  select(country_id,pid,sid,agedays, shigella_eiec_afe, ST_ETEC_afe, other_afe) %>% 
+  rename(Shigella = shigella_eiec_afe, ETEC = ST_ETEC_afe, Other = other_afe)
+
+
+
+#Determining major prominent infections
+shig.cause_modified <- shig.cause_modified %>% mutate(total_afe = Shigella + ETEC + Other,
+                                                      shig_major = ifelse(Shigella > 0.25, 1, 0),
+                                                      ETEC_major = ifelse(ETEC > 0.25, 1, 0),
+                                                      other_major = ifelse(Other > 0.25, 1, 0),
+                                                      coinfection = ifelse(shig_major + ETEC_major + other_major > 1, 1, 0))
+
+# # Decide which pathogen is the cause based on the highest AFE
+# columns_to_check <- c("Shigella", "ETEC", "Other")
+# shig.cause_modified$max.cause <- colnames(shig.cause_modified[columns_to_check])[apply(shig.cause_modified[columns_to_check], 1, which.max)]
+
+
+shig.cause_modified <- shig.cause_modified %>% 
+  mutate(diarrhea.cause = ifelse(coinfection == 1, 
+                                 ifelse(shig_major == 1, 
+                                        ifelse(ETEC_major == 1, 
+                                               ifelse(other_major == 1, "Shigella, ETEC, & Other", "Shigella & ETEC"), 
+                                               "Shigella & Other"),
+                                        "ETEC & Other"),
+                                 ifelse(shig_major == 1, "Shigella",
+                                        ifelse(ETEC_major == 1, "ETEC",
+                                               ifelse(other_major == 1, "Other", "None")))))
+
+
+
+
+shig.cause_modified <- merge(x = shig.cause_modified,
+                             y = shig.cause,
+                             by = "sid")
+
+table(shig.cause_modified$diarrhea.cause.x, shig.cause_modified$diarrhea.cause.y)
+
+
+shig.cause <- shig.cause_modified %>% select(sid, diarrhea.cause.x) %>%
+  rename(diarrhea.cause = diarrhea.cause.x)
+
 # countries and age groups for simulation ----
 countries <- c("BG","PE","PK","IN")
 agegroups <- c("12-17 months","18-24 months")
@@ -22,7 +71,8 @@ inc.df <- tac %>%
   mutate(month_year = as.yearmon(date),
          shig.diar = ifelse(grepl("Shigella",diarrhea.cause) | (diarrhea == 1 & shigella_micro == 1),1,0),
          shig.diar = ifelse(is.na(shig.diar) & diarrhea == 1,0,shig.diar)) %>% 
-  mutate(other.diar = ifelse(diarrhea == 1 & shig.diar == 0,1,0)) %>% 
+  mutate(ETEC.diar = ifelse(grepl("ETEC", diarrhea.cause), 1, 0),
+         other.diar = ifelse(diarrhea == 1 & shig.diar == 0 & ETEC.diar == 0,1,0)) %>% 
   group_by(country_id,pid,month_year) %>% 
   mutate(agemonth = mean(agedays/30.5)) %>% 
   mutate(agegrp = case_when(agedays<6*30.5 ~ "0-5 months",
@@ -31,9 +81,11 @@ inc.df <- tac %>%
                             agedays>=18*30.5 ~ "18-24 months")) %>% 
   group_by(country_id,agegrp,pid) %>% 
   summarise(shig.diar = sum(shig.diar),
+            ETEC.diar = sum(ETEC.diar),
             other.diar = sum(other.diar)) %>% 
   mutate(obs_months = 6) %>% 
   mutate(monthly.shigella = shig.diar/obs_months,
+         monthly.ETEC = ETEC.diar/obs_months,
          monthly.other = other.diar/obs_months)
 
 # incidence poisson models ----
@@ -47,6 +99,15 @@ summary(m1)
 
 inc.df$pred.shig <- exp(predict(m1, type = "link"))
 
+# ETEC diarrhea
+m1.2 <- glm(ETEC.diar ~ country_id * agegrp + offset(log(obs_months)), 
+            data = inc.df, 
+            family = poisson())
+
+summary(m1.2)
+
+inc.df$pred.ETEC <- exp(predict(m1.2, type = "link"))
+
 # Other diarrhea
 m2 <- glm(other.diar ~ country_id * agegrp + offset(log(obs_months)), 
           data = inc.df, 
@@ -56,7 +117,7 @@ summary(m2)
 
 inc.df$pred.other <- exp(predict(m2, type = "link"))
 
-# Predicted monthly counts of shigella & other diarrhea ----
+# Predicted monthly counts of shigella, ETEC, & other diarrhea ----
 est.df <- expand.grid(
   country_id = unique(inc.df$country_id),
   agegrp = unique(inc.df$agegrp),
@@ -67,6 +128,12 @@ est.df$log_count_shigella <- predict(m1, newdata = est.df, type = "link")
 est.df$count_shigella <- exp(est.df$log_count_shigella)
 est.df <- est.df %>%
   mutate(IR_shigella = count_shigella / obs_months)  # obs_months is 1 here
+
+est.df$log_count_ETEC <- predict(m1.2, newdata = est.df, type = "link")
+est.df$count_ETEC <- exp(est.df$log_count_ETEC)
+est.df <- est.df %>%
+  mutate(IR_ETEC = count_ETEC / obs_months)  # obs_months is 1 here
+
 
 est.df$log_count_other <- predict(m2, newdata = est.df, type = "link")
 est.df$count_other <- exp(est.df$log_count_other)
@@ -128,11 +195,72 @@ saveRDS(est.df2 %>%
 # (shigella_eiec < 35), diarrhea or not, using Ct and shig.diar as
 # predictors. No separate subclinical-only model is needed.
 
+
+# Probability of subclinical ETEC ----
+
+#Merging in the ETEC ct values into ds
+tac_ETEC <- tac %>% select(sid, ST_ETEC)
+ds <- merge(x = ds,
+            y = tac_ETEC,
+            by = "sid",
+            all.x = TRUE)
+
+
+ETEC.sub <- ds %>% 
+  select(country_id,pid,sid,agedays,ST_ETEC) %>% 
+  left_join(shig.cause,by = "sid") %>% 
+  mutate(agemonths = floor(agedays/30.5),
+         agegrp = case_when(agemonths<6 ~ "0-5 months",
+                            agemonths>=6 & agemonths<12 ~ "6-11 months",
+                            agemonths>=12 & agemonths<18 ~ "12-17 months",
+                            agemonths>=18 ~ "18-24 months"),
+         ETEC.diarrhea = ifelse(grepl("ETEC",diarrhea.cause),1,0),
+         ETEC.subclin = ifelse(ST_ETEC < 35 & ETEC.diarrhea == 0, 1, 0))
+
+ETEC.sub2 <- ETEC.sub %>% 
+  group_by(country_id,pid,agegrp,agemonths) %>% 
+  summarise(ETEC.diarrhea = sum(ETEC.diarrhea),
+            ETEC.subclin = sum(ETEC.subclin)) %>% 
+  # mutate(ETEC.diarrhea = ifelse(ETEC.diarrhea>1,1,0),
+  #        ETEC.subclin = ifelse(ETEC.subclin>1,1,0)) %>% 
+  ungroup() %>% 
+  arrange(pid,agemonths) %>% 
+  group_by(pid) %>% 
+  mutate(prev.diarrhea = ifelse(lag(ETEC.diarrhea, default = 0) == 1 |
+                                  ETEC.diarrhea == 1,1,0) ) 
+
+m3.2 <- glm(ETEC.subclin ~ country_id * agegrp + prev.diarrhea,
+            data = ETEC.sub2, 
+            family = poisson())
+summary(m3.2)
+
+# Predicted monthly probability for subclinical ETEC ----
+est.df2.2 <- expand.grid(
+  country_id = unique(ETEC.sub2$country_id),
+  agegrp = unique(ETEC.sub2$agegrp),
+  prev.diarrhea = c(0, 1)
+)
+
+est.df2.2$predicted_log_odds <- predict(m3.2, est.df2.2, type = "link")
+est.df2.2$predicted_prob <- exp(est.df2.2$predicted_log_odds) / (1 + exp(est.df2.2$predicted_log_odds))
+
+check_ETEC_asymp_incidence <- est.df2.2 %>%
+  filter(country_id %in% countries,
+         agegrp %in% agegroups) %>%
+  select(country_id,agegrp,prev.diarrhea,predicted_prob)
+
+saveRDS(est.df2.2 %>%
+          filter(country_id %in% countries,
+                 agegrp %in% agegroups) %>%
+          select(country_id,agegrp,prev.diarrhea,predicted_prob),
+        here::here("sim param data","ETEC_subclinical_prob.RDS"))
+
+
 # Probability of other pathogen detections ----
 other.det <- tac %>% 
   select(country_id,pid,sid,stooltype,agedays,adenovirus_40_41,
          astrovirus,campylobacter_jejuni_coli,cryptosporidium,
-         ST_ETEC,norovirus_gii,rotavirus,sapovirus,tEPEC) %>% 
+         norovirus_gii,rotavirus,sapovirus,tEPEC) %>% 
   pivot_longer(cols = adenovirus_40_41:tEPEC,
                names_to = "pathogen",
                values_to = "ct") %>% 
@@ -172,11 +300,12 @@ saveRDS(est.df3 %>%
 
 # Shigella severity and culture probability ----
 sev.df <- tac %>% 
-  select(country_id,pid,sid,agedays,stooltype,score,gemsdef,shigella_eiec,shigella_micro) %>% 
+  select(country_id,pid,sid,agedays,stooltype,score,gemsdef,shigella_eiec,shigella_micro, ST_ETEC, st_etec_micro) %>% 
   mutate(diarrhea = ifelse(stooltype == "D1",1,0)) %>% 
   left_join(shig.cause,by = "sid") %>% 
   mutate(shig.diar = ifelse(grepl("Shigella",diarrhea.cause) | (diarrhea == 1 & shigella_micro == 1),1,0),
-         other.diar = ifelse(diarrhea == 1 & shig.diar == 0,1,0),
+         ETEC.diar = ifelse(grepl("ETEC",diarrhea.cause) | (diarrhea == 1 & st_etec_micro == 1),1,0),
+         other.diar = ifelse(diarrhea == 1 & shig.diar == 0 & ETEC.diar == 0,1,0),
          agegrp = case_when(agedays<6*30.5 ~ "0-5 months",
                             agedays>=6*30.5 & agedays<12*30.5 ~ "6-11 months",
                             agedays>=12*30.5 & agedays<18*30.5 ~ "12-17 months",
@@ -240,6 +369,44 @@ sev_params <- list(
 )
 
 saveRDS(sev_params, here::here("sim param data","shigella_severity.RDS"))
+
+# ETEC diarrhea severity ----
+
+# 1. Score distribution: observed mean/SD by country x agegrp
+ETEC_score_params <- sev.df %>%
+  filter(ETEC.diar == 1,
+         country_id %in% countries,
+         agegrp %in% agegroups) %>%
+  group_by(country_id, agegrp) %>%
+  summarise(
+    mean_score = mean(score),
+    sd_score   = sd(score),
+    n          = n(),
+    .groups    = "drop"
+  )
+
+# 2. P(gemsdef): logistic regression with continuous score
+glm_gems_ETEC <- glm(gemsdef ~ agegrp + country_id + score,
+                      data = sev.df %>% filter(ETEC.diar == 1),
+                      family = binomial)
+# also tried fitting with score as factor, with restricted cubic spline, and as log(score) and linear was the best fit
+
+ETEC_gems_params <- list(
+  coefs = coef(glm_gems_ETEC),
+  vcov  = vcov(glm_gems_ETEC)
+)
+
+# save severity and culture parameters
+ETEC_sev_params <- list(
+  score_params   = ETEC_score_params,
+  gems_params    = ETEC_gems_params,
+  ref_agegrp     = levels(sev.df$agegrp)[1],
+  ref_country    = levels(sev.df$country_id)[1]
+)
+
+saveRDS(ETEC_sev_params, here::here("sim param data","ETEC_severity.RDS"))
+
+
 
 # Other diarrhea severity ----
 
@@ -390,12 +557,45 @@ saveRDS(quantity.dist %>%
           select(country_id,agegrp,severity,mean_quantity,shape_quantity,n),
         here::here("sim param data","shigella_quantity.RDS"))
 
+
+# ETEC pathogen quantity distribution ----
+# Since this filter requires ETEC_eiec < 35, quantity > 0 always holds.
+
+ct2.df <- sev.df %>% 
+  filter(ST_ETEC < 35) %>% 
+  mutate(
+    quantity = (35 - ST_ETEC) / 3.322,
+    severity = case_when(
+      shig.diar == 1 & (score >= 6 | gemsdef == 1) ~ "Severe",
+      shig.diar == 1  ~ "Mild",
+      TRUE ~ "Subclinical"
+    )
+  )
+
+ETEC_qty_fit <- fit_quantity_gamma(ct2.df)
+summary(ETEC_qty_fit$model)
+
+# Merge with cell sample sizes
+quantity.dist <- ETEC_qty_fit$pred_df %>%
+  left_join(ct2.df %>% count(country_id, agegrp, severity), by = c("country_id", "agegrp", "severity"))
+
+# Display results: restricted to the country x agegrp combinations actually
+# used in the simulation, and flag any missing cell. (Diagnostic only —
+# does not affect what gets saved below.)
+invisible(check_quantity_coverage(quantity.dist, "ETEC quantity"))
+
+saveRDS(quantity.dist %>%
+          filter(country_id %in% countries,
+                 agegrp %in% agegroups) %>%
+          select(country_id,agegrp,severity,mean_quantity,shape_quantity,n),
+        here::here("sim param data","ETEC_quantity.RDS"))
+
 # Other pathogen quantity distribution ----
 # Same model structure as Shigella above: Gamma GLM (log link) on quantity,
 # conditional on country, agegrp, and severity (Subclinical / Mild / Severe).
 
 pathogens <- c("adenovirus_40_41", "astrovirus", "campylobacter_jejuni_coli", 
-               "cryptosporidium", "ST_ETEC", "norovirus_gii", "rotavirus", 
+               "cryptosporidium", "norovirus_gii", "rotavirus", 
                "sapovirus", "tEPEC")
 
 other.quantity.dist <- tac %>% 
