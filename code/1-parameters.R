@@ -13,10 +13,14 @@ countries <- c("BG", "PE", "PK", "IN")
 diarrhea_ir <- readRDS(here::here("sim param data","diarrhea_incidence.RDS"))
 ## Probability of shigella subclinical infection per child month
 shigella_sub <- readRDS(here::here("sim param data","shigella_subclinical_prob.RDS"))
+## Probability of ETEC subclinical infection per child month
+ETEC_sub <- readRDS(here::here("sim param data","ETEC_subclinical_prob.RDS"))
 ## Probability of other pathogen infection per child month
 other_sub <- readRDS(here::here("sim param data","other_subclinical_prob.RDS"))
 ## Shigella severity: score mean/SD table + GLM coefs for gemsdef and culture
-sev_params <- readRDS(here::here("sim param data","shigella_severity.RDS"))
+shigella_sev_params <- readRDS(here::here("sim param data","shigella_severity.RDS"))
+## ETEC severity: score mean/SD table + GLM coefs for gemsdef and culture
+ETEC_sev_params <- readRDS(here::here("sim param data","ETEC_severity.RDS"))
 ## Other diarrhea severity: score mean/SD table + GLM coefs for gemsdef
 other_sev_params <- readRDS(here::here("sim param data","other_severity.RDS"))
 ## Shigella pathogen quantity: Gamma GLM (log link) fit on country x agegrp
@@ -25,6 +29,12 @@ other_sev_params <- readRDS(here::here("sim param data","other_severity.RDS"))
 ## needed, e.g. as a predictor in the culture model — see quantity_to_ct()
 ## in 2-functions.cpp/2-functions.R for the conversion formula)
 shigella_quantity <- readRDS(here::here("sim param data","shigella_quantity.RDS"))
+## ETEC pathogen quantity: Gamma GLM (log link) fit on country x agegrp
+## x severity (Subclinical/Mild/Severe), with a constant shape parameter
+## (quantity is simulated directly, then converted to Ct only where Ct is
+## needed, e.g. as a predictor in the culture model — see quantity_to_ct()
+## in 2-functions.cpp/2-functions.R for the conversion formula)
+ETEC_quantity <- readRDS(here::here("sim param data","ETEC_quantity.RDS"))
 ## Other pathogen quantity: same Gamma GLM structure as Shigella, fit on
 ## country x agegrp x severity (Subclinical/Mild/Severe)
 ## (quantity is simulated directly, then converted to Ct for output —
@@ -32,13 +42,21 @@ shigella_quantity <- readRDS(here::here("sim param data","shigella_quantity.RDS"
 other_quantity <- readRDS(here::here("sim param data","other_quantity.RDS"))
 
 # Vaccine efficacy assumptions ----
-ve_infection <- 0.10  # 10% VE against infection
-ve_disease   <- 0.40  # 40% VE against disease
-ve_severity  <- 0.60  # target AVERAGE marginal VE against MSD, across both
+ve_infection_shig <- 0.10  # 10% VE against infection
+ve_disease_shig   <- 0.40  # 40% VE against disease
+ve_severity_shig  <- 0.60  # target AVERAGE marginal VE against MSD, across both
                        # definitions ("score >= 6" and GEMS MSD) — achieved
                        # via a severity-dependent score shrinkage calibrated
                        # below (see calibrate_ve_max())
-ve_ct        <- 0.10  # reduction in pathogen quantity among breakthrough cases
+ve_ct_shig        <- 0.10  # reduction in pathogen quantity among breakthrough cases
+
+ve_infection_ETEC <- 0.10  # 10% VE against infection
+ve_disease_ETEC   <- 0.40  # 40% VE against disease
+ve_severity_ETEC  <- 0.60  # target AVERAGE marginal VE against MSD, across both
+# definitions ("score >= 6" and GEMS MSD) — achieved
+# via a severity-dependent score shrinkage calibrated
+# below (see calibrate_ve_max())
+ve_ct_ETEC        <- 0.10  # reduction in pathogen quantity among breakthrough cases
 
 # ---------------------------------------------------------------
 # Severity-dependent VE on score
@@ -235,7 +253,7 @@ simulate_gems_ve_cell <- function(ve_max, mean_score, sd_score, gems_coefs,
 # target_ve_severity, folding ve_disease into the objective rather than
 # treating target_ve_severity as a case-conditional target as before.
 # ---------------------------------------------------------------
-calibrate_ve_max <- function(target_ve_severity, score_params, gems_coefs,
+calibrate_ve_max_shig <- function(target_ve_severity, score_params, gems_coefs,
                              diarrhea_ir, ve_disease, n_draws = 200000) {
 
   weights <- score_params %>%
@@ -311,6 +329,84 @@ calibrate_ve_max <- function(target_ve_severity, score_params, gems_coefs,
   uniroot(ve_objective, interval = c(0, 0.999), tol = 0.005)$root
 }
 
+
+  #Repeating the process but calibrating for ETEC
+calibrate_ve_max_ETEC <- function(target_ve_severity, score_params, gems_coefs,
+                                  diarrhea_ir, ve_disease, n_draws = 200000) {
+  
+  weights <- score_params %>%
+    left_join(diarrhea_ir, by = c("country_id", "agegrp")) %>%
+    mutate(weight = IR_ETEC / sum(IR_ETEC))
+  
+  achieved_ve_fn <- function(ve_max) {
+    cell_results <- weights %>%
+      rowwise() %>%
+      mutate(
+        score_res     = list(simulate_score_ve_cell(ve_max, mean_score, sd_score, n_draws)),
+        p_unvax_score = score_res$p_unvax,
+        p_vax_score   = score_res$p_vax,
+        gems_res      = list(simulate_gems_ve_cell(ve_max, mean_score, sd_score,
+                                                   gems_coefs, agegrp, country_id, n_draws)),
+        p_unvax_gems  = gems_res$p_unvax,
+        p_vax_gems    = gems_res$p_vax
+      ) %>%
+      ungroup()
+    
+    weighted_p_unvax_score <- sum(cell_results$p_unvax_score * cell_results$weight)
+    weighted_p_vax_score   <- sum(cell_results$p_vax_score   * cell_results$weight)
+    weighted_p_unvax_gems  <- sum(cell_results$p_unvax_gems  * cell_results$weight)
+    weighted_p_vax_gems    <- sum(cell_results$p_vax_gems    * cell_results$weight)
+    
+    # conditional (case-severity) VE, per definition
+    cond_ve_score <- 1 - (weighted_p_vax_score / weighted_p_unvax_score)
+    cond_ve_gems  <- 1 - (weighted_p_vax_gems   / weighted_p_unvax_gems)
+    
+    # marginal (population-level) VE, per definition — compounds the
+    # case-severity effect with the separate ve_disease reduction
+    marginal_ve_score <- 1 - (1 - ve_disease) * (1 - cond_ve_score)
+    marginal_ve_gems  <- 1 - (1 - ve_disease) * (1 - cond_ve_gems)
+    
+    mean(c(marginal_ve_score, marginal_ve_gems))
+  }
+  
+  ve_objective <- function(ve_max) achieved_ve_fn(ve_max) - target_ve_severity
+  
+  # Sanity-check the achievable range before calling uniroot. At ve_max = 0
+  # (no case-severity shrinkage at all), the achieved marginal VE is not 0
+  # under this formulation — it's exactly ve_disease, since vaccination
+  # still reduces overall Shigella diarrhea incidence even with no severity
+  # effect. The achievable ceiling as ve_max -> 1 is capped below 100% for
+  # GEMS MSD by its GLM intercept (unlike "score >= 6", which has no such
+  # floor), so the ceiling here is whatever the average of the two
+  # definitions reaches, not necessarily near 100%.
+  ve_at_0    <- achieved_ve_fn(0)
+  ve_at_ceil <- achieved_ve_fn(0.999)
+  
+  if (ve_at_ceil < target_ve_severity) {
+    stop(sprintf(
+      paste0(
+        "Target average marginal VE against MSD (%.1f%%) is unreachable.\n",
+        "  Achieved average marginal VE at ve_max = 0     : %.1f%%\n",
+        "  Achieved average marginal VE at ve_max = 0.999 : %.1f%%  <-- ceiling for this mechanism\n",
+        "Lower ve_severity below %.1f%%."
+      ),
+      target_ve_severity * 100, ve_at_0 * 100, ve_at_ceil * 100, ve_at_ceil * 100
+    ))
+  }
+  
+  if (ve_at_0 > target_ve_severity) {
+    stop(sprintf(
+      paste0(
+        "Target average marginal VE against MSD (%.1f%%) is already exceeded at ve_max = 0 ",
+        "(%.1f%%), i.e. by ve_disease alone. Raise ve_severity above %.1f%%, or lower ve_disease."
+      ),
+      target_ve_severity * 100, ve_at_0 * 100, ve_at_0 * 100
+    ))
+  }
+  
+  uniroot(ve_objective, interval = c(0, 0.999), tol = 0.005)$root
+}
+
 # ---------------------------------------------------------------
 # Cache for calibrated ve_max values, keyed by (target ve_severity,
 # ve_disease).
@@ -335,15 +431,15 @@ calibrate_ve_max <- function(target_ve_severity, score_params, gems_coefs,
 # ---------------------------------------------------------------
 .ve_max_cache <- new.env(parent = emptyenv())
 
-get_calibrated_ve_max <- function(ve_severity, score_params, gems_coefs,
+get_calibrated_ve_max_shig <- function(ve_severity, score_params, gems_coefs,
                                   diarrhea_ir, ve_disease, n_draws = 200000) {
-  cache_key <- paste0("sev", ve_severity, "_dis", ve_disease)
+  cache_key <- paste0("shig","sev", ve_severity, "_dis", ve_disease)
 
   if (!exists(cache_key, envir = .ve_max_cache, inherits = FALSE)) {
     message(sprintf(
-      "Calibrating ve_max for average marginal VE against MSD (score/gems) = %.2f (ve_disease = %.2f)...",
+      "Calibrating Shigella ve_max for average marginal VE against MSD (score/gems) = %.2f (ve_disease = %.2f)...",
       ve_severity, ve_disease))
-    calibrated <- calibrate_ve_max(
+    calibrated <- calibrate_ve_max_shig(
       target_ve_severity = ve_severity,
       score_params        = score_params,
       gems_coefs          = gems_coefs,
@@ -359,6 +455,33 @@ get_calibrated_ve_max <- function(ve_severity, score_params, gems_coefs,
                     cache_key, get(cache_key, envir = .ve_max_cache)))
   }
 
+  get(cache_key, envir = .ve_max_cache, inherits = FALSE)
+}
+
+get_calibrated_ve_max_ETEC <- function(ve_severity, score_params, gems_coefs,
+                                       diarrhea_ir, ve_disease, n_draws = 200000) {
+  cache_key <- paste0("ETEC","sev", ve_severity, "_dis", ve_disease)
+  
+  if (!exists(cache_key, envir = .ve_max_cache, inherits = FALSE)) {
+    message(sprintf(
+      "Calibrating ETEC ve_max for average marginal VE against MSD (score/gems) = %.2f (ve_disease = %.2f)...",
+      ve_severity, ve_disease))
+    calibrated <- calibrate_ve_max_ETEC(
+      target_ve_severity = ve_severity,
+      score_params        = score_params,
+      gems_coefs          = gems_coefs,
+      diarrhea_ir         = diarrhea_ir,
+      ve_disease          = ve_disease,
+      n_draws             = n_draws
+    )
+    assign(cache_key, calibrated, envir = .ve_max_cache)
+    message(sprintf("  -> calibrated ve_max = %.4f (cached for %s)",
+                    calibrated, cache_key))
+  } else {
+    message(sprintf("Using cached ve_max for %s -> ve_max = %.4f",
+                    cache_key, get(cache_key, envir = .ve_max_cache)))
+  }
+  
   get(cache_key, envir = .ve_max_cache, inherits = FALSE)
 }
 
@@ -398,7 +521,7 @@ get_calibrated_ve_max <- function(ve_severity, score_params, gems_coefs,
 #     ve_disease   = ve_disease
 #   )
 # ---------------------------------------------------------------
-compute_true_ve_by_site <- function(score_params, gems_coefs, diarrhea_ir,
+compute_true_ve_by_site_shig <- function(score_params, gems_coefs, diarrhea_ir,
                                     ve_max, ve_disease, n_draws = 1e6) {
 
   cells <- score_params %>%
@@ -445,19 +568,77 @@ compute_true_ve_by_site <- function(score_params, gems_coefs, diarrhea_ir,
     select(country_id, true_ve_score, true_ve_gems)
 }
 
-f.param <- function(ve_infection,
-                    ve_disease,
-                    ve_severity,
-                    ve_ct) {
+compute_true_ve_by_site_ETEC <- function(score_params, gems_coefs, diarrhea_ir,
+                                    ve_max, ve_disease, n_draws = 1e6) {
+  
+  cells <- score_params %>%
+    left_join(diarrhea_ir, by = c("country_id", "agegrp"))
+  
+  cell_probs <- cells %>%
+    rowwise() %>%
+    mutate(
+      score_res     = list(simulate_score_ve_cell(ve_max, mean_score, sd_score, n_draws)),
+      p_unvax_score = score_res$p_unvax,
+      p_vax_score   = score_res$p_vax,
+      gems_res      = list(simulate_gems_ve_cell(ve_max, mean_score, sd_score,
+                                                 gems_coefs, agegrp, country_id, n_draws)),
+      p_unvax_gems  = gems_res$p_unvax,
+      p_vax_gems    = gems_res$p_vax
+    ) %>%
+    ungroup() %>%
+    select(country_id, agegrp, IR_ETEC,
+           p_unvax_score, p_vax_score, p_unvax_gems, p_vax_gems)
+  
+  # incidence-weighted conditional -> marginal VE, for whatever set of
+  # country x agegrp cells is passed in (a single country's 2 cells for
+  # per-site rows, or all 8 cells for the pooled "All Sites" row)
+  summarise_ve <- function(df) {
+    cond_ve_score <- 1 - weighted.mean(df$p_vax_score, df$IR_ETEC) /
+      weighted.mean(df$p_unvax_score, df$IR_ETEC)
+    cond_ve_gems  <- 1 - weighted.mean(df$p_vax_gems, df$IR_ETEC) /
+      weighted.mean(df$p_unvax_gems, df$IR_ETEC)
+    tibble(
+      true_ve_score = 1 - (1 - ve_disease) * (1 - cond_ve_score),
+      true_ve_gems  = 1 - (1 - ve_disease) * (1 - cond_ve_gems)
+    )
+  }
+  
+  per_site <- cell_probs %>%
+    group_by(country_id) %>%
+    group_modify(~ summarise_ve(.x)) %>%
+    ungroup()
+  
+  pooled <- summarise_ve(cell_probs) %>%
+    mutate(country_id = "ALL")
+  
+  bind_rows(per_site, pooled) %>%
+    select(country_id, true_ve_score, true_ve_gems)
+}
+
+f.param <- function(ve_infection_shig,
+                    ve_disease_shig,
+                    ve_severity_shig,
+                    ve_ct_shig,
+                    ve_infection_ETEC,
+                    ve_disease_ETEC,
+                    ve_severity_ETEC,
+                    ve_ct_ETEC) {
   
   # Diarrhea incidence: apply VE against disease to shigella IR
   diarrhea_ir_out <- diarrhea_ir %>% 
-    mutate(vax_IR_shigella = IR_shigella * (1 - ve_disease))
+    mutate(vax_IR_shigella = IR_shigella * (1 - ve_disease_shig),
+           vax_IR_ETEC = IR_ETEC * (1 - ve_disease_ETEC))
   
   # Subclinical probability: apply VE against infection
   shigella_sub_out <- shigella_sub %>% 
     left_join(diarrhea_ir_out, by = c("country_id", "agegrp")) %>% 
-    mutate(vax_predicted_prob = (predicted_prob + (IR_shigella - vax_IR_shigella)) * (1 - ve_infection))
+    mutate(vax_predicted_prob = (predicted_prob + (IR_shigella - vax_IR_shigella)) * (1 - ve_infection_shig))
+  
+  # Subclinical probability: apply VE against infection
+  ETEC_sub_out <- ETEC_sub %>% 
+    left_join(diarrhea_ir_out, by = c("country_id", "agegrp")) %>% 
+    mutate(vax_predicted_prob = (predicted_prob + (IR_ETEC - vax_IR_ETEC)) * (1 - ve_infection_ETEC))
+  
   
   # Shigella severity: calibrate the linear severity-dependent shrinkage
   # parameter (ve_max) so the AVERAGE of the marginal VEs against
@@ -467,16 +648,35 @@ f.param <- function(ve_infection,
   # draw itself is unaffected by vax status — shrinkage is applied post-draw
   # inside simulate_trial. Cached so that scenarios sharing the same
   # (ve_severity, ve_disease) pair get an identical ve_max.
-  ve_max_calibrated <- get_calibrated_ve_max(
-    ve_severity   = ve_severity,
-    score_params  = sev_params$score_params,
-    gems_coefs    = sev_params$gems_params$coefs,
+  ve_max_calibrated_shig <- get_calibrated_ve_max_shig(
+    ve_severity   = ve_severity_shig,
+    score_params  = shigella_sev_params$score_params,
+    gems_coefs    = shigella_sev_params$gems_params$coefs,
     diarrhea_ir   = diarrhea_ir,
-    ve_disease    = ve_disease
+    ve_disease    = ve_disease_shig
   )
   
-  sev_params_out <- sev_params
-  sev_params_out$ve_max <- ve_max_calibrated
+  shig_sev_params_out <- shigella_sev_params
+  shig_sev_params_out$ve_max <- ve_max_calibrated_shig
+  
+  # ETEC severity: calibrate the linear severity-dependent shrinkage
+  # parameter (ve_max) so the AVERAGE of the marginal VEs against
+  # "score >= 6" MSD and GEMS MSD equals ve_severity (see calibrate_ve_max()
+  # for why "marginal" — it compounds with ve_disease, since both MSD truth
+  # definitions require a ETEC diarrhea episode AND severity). The score
+  # draw itself is unaffected by vax status — shrinkage is applied post-draw
+  # inside simulate_trial. Cached so that scenarios sharing the same
+  # (ve_severity, ve_disease) pair get an identical ve_max.
+  ve_max_calibrated_ETEC <- get_calibrated_ve_max_ETEC(
+    ve_severity   = ve_severity_ETEC,
+    score_params  = ETEC_sev_params$score_params,
+    gems_coefs    = ETEC_sev_params$gems_params$coefs,
+    diarrhea_ir   = diarrhea_ir,
+    ve_disease    = ve_disease_ETEC
+  )
+  
+  ETEC_sev_params_out <- ETEC_sev_params
+  ETEC_sev_params_out$ve_max <- ve_max_calibrated_ETEC
   
   # Other severity: no vax effect assumed
   other_sev_params_out <- other_sev_params
@@ -490,14 +690,28 @@ f.param <- function(ve_infection,
   # the mean while holding shape fixed already implies a proportionally
   # smaller variance for breakthrough cases (Var = mean^2 / shape).
   shigella_quantity_out <- shigella_quantity %>% 
-    mutate(vax_mean_quantity = mean_quantity * (1 - ve_ct))
+    mutate(vax_mean_quantity = mean_quantity * (1 - ve_ct_shig))
+  
+  # ETEC pathogen quantity: vaccinated breakthrough cases have lower
+  # quantity (i.e. weaker infections). No upper-bound workaround needed
+  # here (unlike the old Ct-based approach, which needed an artificial
+  # cap at 34.9 to avoid exceeding the Ct=35 detection ceiling) — quantity
+  # has a natural lower bound at 0 enforced at simulation time instead.
+  # shape_quantity (the Gamma shape parameter) is left unchanged: scaling
+  # the mean while holding shape fixed already implies a proportionally
+  # smaller variance for breakthrough cases (Var = mean^2 / shape).
+  ETEC_quantity_out <- ETEC_quantity %>% 
+    mutate(vax_mean_quantity = mean_quantity * (1 - ve_ct_ETEC))
   
   return(list(
     diarrhea_ir          = diarrhea_ir_out,
     shigella_sub         = shigella_sub_out,
-    sev_params           = sev_params_out,
+    ETEC_sub             = ETEC_sub_out,
+    shigella_sev_params  = shig_sev_params_out,
+    ETEC_sev_params      = ETEC_sev_params_out,
     other_sev_params     = other_sev_params_out,
     shigella_quantity    = shigella_quantity_out,
+    ETEC_quantity        = ETEC_quantity_out,
     other_quantity       = other_quantity
   ))
 }

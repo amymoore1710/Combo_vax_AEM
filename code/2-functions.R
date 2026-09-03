@@ -7,6 +7,7 @@ diarrhea_event <- function(lambda) {
 diarrhea_lambda <- function(data, vax_status, age_group, country) {
   row <- data[data$country_id == country & data$agegrp == age_group, ]
   ir_shigella <- if (vax_status == 1) row$vax_IR_shigella else row$IR_shigella
+  ir_ETEC <- if (vax_status == 1) row$vax_IR_ETEC else row$IR_ETEC
   c(ir_shigella = ir_shigella, ir_other = row$IR_other)
 }
 

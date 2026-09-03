@@ -8,19 +8,24 @@ countries  <- c("BG", "PE", "PK", "IN")
 # MAL-ED parameters ----
 diarrhea_ir  <- readRDS(here::here("sim param data", "diarrhea_incidence.RDS"))
 shigella_sub <- readRDS(here::here("sim param data", "shigella_subclinical_prob.RDS"))
+ETEC_sub <- readRDS(here::here("sim param data", "ETEC_subclinical_prob.RDS"))
 other_sub    <- readRDS(here::here("sim param data", "other_subclinical_prob.RDS"))
 sev_params       <- readRDS(here::here("sim param data", "shigella_severity.RDS"))
+ETEC_sev_params       <- readRDS(here::here("sim param data", "ETEC_severity.RDS"))
 other_sev_params <- readRDS(here::here("sim param data", "other_severity.RDS"))
 shigella_quantity <- readRDS(here::here("sim param data", "shigella_quantity.RDS"))
+ETEC_quantity <- readRDS(here::here("sim param data", "ETEC_quantity.RDS"))
 other_quantity <- readRDS(here::here("sim param data", "other_quantity.RDS"))
 
 # incidence rates ----
 ir.tbl <- diarrhea_ir %>%
-  pivot_longer(cols = c("IR_other", "IR_shigella"),
+  pivot_longer(cols = c("IR_other", "IR_shigella", "IR_ETEC"),
                names_to = "parm", values_to = "val") %>%
   mutate(parm = ifelse(parm == "IR_shigella",
                        "Incidence rate of Shigella diarrhea",
-                       "Incidence rate of other diarrhea"),
+                       ifelse(parm == "IR_ETEC", 
+                              "Incidence rate of ETEC diarrhea",
+                              "Incidence rate of other diarrhea")),
          val = sprintf("%.3f", val))
 
 # shigella subclinical ----
@@ -28,6 +33,14 @@ shig.sub.tbl <- shigella_sub %>%
   mutate(parm = ifelse(prev.diarrhea == 1,
                        "Probability of detection of subclinical Shigella per month, diarrhea in prior month",
                        "Probability of detection of subclinical Shigella per month, no diarrhea in prior"),
+         val = sprintf("%.3f", predicted_prob)) %>%
+  select(country_id, agegrp, parm, val)
+
+# ETEC subclinical ----
+ETEC.sub.tbl <- ETEC_sub %>%
+  mutate(parm = ifelse(prev.diarrhea == 1,
+                       "Probability of detection of subclinical ETEC per month, diarrhea in prior month",
+                       "Probability of detection of subclinical ETEC per month, no diarrhea in prior"),
          val = sprintf("%.3f", predicted_prob)) %>%
   select(country_id, agegrp, parm, val)
 
@@ -46,6 +59,12 @@ other.sub.tbl <- other_sub %>%
 # severity: score mean/SD from lookup table ----
 shig.score.tbl <- sev_params$score_params %>%
   mutate(parm = "Modified Vesikari score of Shigella diarrhea (mean, sd)",
+         val  = paste0(sprintf("%.2f", mean_score),
+                       " (", sprintf("%.2f", sd_score), ")")) %>%
+  select(country_id, agegrp, parm, val)
+
+ETEC.score.tbl <- ETEC_sev_params$score_params %>%
+  mutate(parm = "Modified Vesikari score of ETEC diarrhea (mean, sd)",
          val  = paste0(sprintf("%.2f", mean_score),
                        " (", sprintf("%.2f", sd_score), ")")) %>%
   select(country_id, agegrp, parm, val)
@@ -96,6 +115,18 @@ shig.gems.tbl <- sev_params$score_params %>%
   ungroup() %>%
   select(country_id, agegrp, parm, val)
 
+ETEC.gems.tbl <- ETEC_sev_params$score_params %>%
+  rowwise() %>%
+  mutate(
+    parm = "Probability of ETEC diarrhea meeting GEMS MSD criteria (at mean score)",
+    val  = sprintf("%.3f",
+                   glm_pred(ETEC_sev_params$gems_params$coefs,
+                            agegrp, as.character(country_id),
+                            extra_name = "score", extra_predictor = mean_score))
+  ) %>%
+  ungroup() %>%
+  select(country_id, agegrp, parm, val)
+
 other.gems.tbl <- other_sev_params$score_params %>%
   rowwise() %>%
   mutate(
@@ -137,6 +168,29 @@ culture.tbl <- expand.grid(
   ungroup() %>%
   select(country_id, agegrp, parm, val)
 
+ETEC.culture.tbl <- expand.grid(
+  country_id = countries,
+  agegrp     = age_groups,
+  ETEC.diar  = c(0, 1),
+  ct_value   = c(20, 30),
+  stringsAsFactors = FALSE
+) %>%
+  rowwise() %>%
+  mutate(
+    parm = sprintf(
+      "Probability of positive culture, %s, Ct=%d",
+      ifelse(ETEC.diar == 1, "ETEC diarrhea", "subclinical ETEC"),
+      ct_value
+    ),
+    val  = sprintf("%.3f",
+                   glm_pred(ETEC_sev_params$culture_params$coefs,
+                            agegrp, country_id,
+                            extra_name = c("ST_ETEC", "ETEC.diar"),
+                            extra_predictor = c(ct_value, ETEC.diar)))
+  ) %>%
+  ungroup() %>%
+  select(country_id, agegrp, parm, val)
+
 # shigella pathogen quantity ----
 # Gamma GLM (log link) fit on country x agegrp x severity. shape_quantity is
 # the (constant-across-cells) Gamma shape parameter; reported alongside the
@@ -152,6 +206,21 @@ shig.quantity.tbl <- shigella_quantity %>%
                                         "Severe Shigella diarrhea quantity (mean, shape)")),
          val  = paste0(sprintf("%.2f", mean_quantity),
                        " (", sprintf("%.2f", shape_quantity), ")")) %>%
+  arrange(country_id, agegrp, parm) %>%
+  select(country_id, agegrp, parm, val)
+
+# ETEC pathogen quantity ----
+# Same Gamma GLM structure as Shigella above.
+ETEC.quantity.tbl <- ETEC_quantity %>%
+  mutate(parm = case_when(
+    severity == "Subclinical" ~ "Subclinical ETEC quantity (mean, shape)",
+    severity == "Mild"        ~ "Mild ETEC diarrhea quantity (mean, shape)",
+    severity == "Severe"      ~ "Severe ETEC diarrhea quantity (mean, shape)"),
+    parm = factor(parm, levels = c("Subclinical ETEC quantity (mean, shape)",
+                                   "Mild ETEC diarrhea quantity (mean, shape)",
+                                   "Severe ETEC diarrhea quantity (mean, shape)")),
+    val  = paste0(sprintf("%.2f", mean_quantity),
+                  " (", sprintf("%.2f", shape_quantity), ")")) %>%
   arrange(country_id, agegrp, parm) %>%
   select(country_id, agegrp, parm, val)
 
@@ -173,13 +242,18 @@ other.quantity.tbl <- other_quantity %>%
 # join all ----
 all.parms <- ir.tbl %>%
   add_row(shig.sub.tbl) %>%
+  add_row(ETEC.sub.tbl) %>%
   add_row(other.sub.tbl) %>%
   add_row(shig.score.tbl) %>%
+  add_row(ETEC.score.tbl) %>%
   add_row(other.score.tbl) %>%
   add_row(shig.gems.tbl) %>%
+  add_row(ETEC.gems.tbl) %>%
   add_row(other.gems.tbl) %>%
   add_row(culture.tbl) %>%
+  add_row(ETEC.culture.tbl) %>%
   add_row(shig.quantity.tbl) %>%
+  add_row(ETEC.quantity.tbl) %>%
   add_row(other.quantity.tbl) %>%
   filter(agegrp %in% age_groups & country_id %in% countries) %>%
   arrange(country_id, agegrp) %>%

@@ -143,7 +143,7 @@ est.df <- est.df %>%
 saveRDS(est.df %>%
           filter(country_id %in% countries,
                  agegrp %in% agegroups) %>%
-          select(country_id,agegrp,IR_other,IR_shigella),here::here("sim param data","diarrhea_incidence.RDS"))
+          select(country_id,agegrp,IR_other,IR_shigella, IR_ETEC),here::here("sim param data","diarrhea_incidence.RDS"))
 
 # Probability of subclinical shigella ----
 shig.sub <- tac %>% 
@@ -370,7 +370,20 @@ sev_params <- list(
 
 saveRDS(sev_params, here::here("sim param data","shigella_severity.RDS"))
 
-# ETEC diarrhea severity ----
+# Shigella severity and culture probability ----
+# sev.df <- tac %>% 
+#   select(country_id,pid,sid,agedays,stooltype,score,gemsdef,shigella_eiec,shigella_micro, ST_ETEC, st_etec_micro) %>% 
+#   mutate(diarrhea = ifelse(stooltype == "D1",1,0)) %>% 
+#   left_join(shig.cause,by = "sid") %>% 
+#   mutate(shig.diar = ifelse(grepl("Shigella",diarrhea.cause) | (diarrhea == 1 & shigella_micro == 1),1,0),
+#          ETEC.diar = ifelse(grepl("ETEC",diarrhea.cause) | (diarrhea == 1 & st_etec_micro == 1),1,0),
+#          other.diar = ifelse(diarrhea == 1 & shig.diar == 0 & ETEC.diar == 0,1,0),
+#          agegrp = case_when(agedays<6*30.5 ~ "0-5 months",
+#                             agedays>=6*30.5 & agedays<12*30.5 ~ "6-11 months",
+#                             agedays>=12*30.5 & agedays<18*30.5 ~ "12-17 months",
+#                             agedays>=18*30.5 ~ "18-24 months")) |> 
+#   mutate(agegrp = relevel(factor(agegrp), ref = "12-17 months"),
+#          country_id = relevel(factor(country_id), ref = "BG")) 
 
 # 1. Score distribution: observed mean/SD by country x agegrp
 ETEC_score_params <- sev.df %>%
@@ -387,8 +400,8 @@ ETEC_score_params <- sev.df %>%
 
 # 2. P(gemsdef): logistic regression with continuous score
 glm_gems_ETEC <- glm(gemsdef ~ agegrp + country_id + score,
-                      data = sev.df %>% filter(ETEC.diar == 1),
-                      family = binomial)
+                data = sev.df %>% filter(ETEC.diar == 1),
+                family = binomial)
 # also tried fitting with score as factor, with restricted cubic spline, and as log(score) and linear was the best fit
 
 ETEC_gems_params <- list(
@@ -396,17 +409,38 @@ ETEC_gems_params <- list(
   vcov  = vcov(glm_gems_ETEC)
 )
 
+# 3. P(culture+): unified model across ALL PCR-positive Shigella specimens
+# (diarrhea or subclinical), using Ct value and Shigella-attributable
+# diarrhea status as predictors. Replaces the previous two-model approach
+# (gemsdef-based for clinical cases, agegrp-only for subclinical cases).
+
+# check cell sizes before fitting — shig.diar=1 vs 0 may be very unbalanced
+# within some country/agegrp strata
+sev.df %>%
+  filter(ST_ETEC < 35) %>%
+  group_by(country_id, agegrp, ETEC.diar) %>%
+  summarise(n = n(), n_culture = sum(st_etec_micro, na.rm = TRUE), .groups = "drop")
+
+ETEC_glm_culture <- glm(st_etec_micro ~ agegrp + country_id + ST_ETEC + ETEC.diar,
+                   data = sev.df %>% filter(ST_ETEC < 35),
+                   family = binomial)
+summary(ETEC_glm_culture)
+
+ETEC_culture_params <- list(
+  coefs = coef(ETEC_glm_culture),
+  vcov  = vcov(ETEC_glm_culture)
+)
+
 # save severity and culture parameters
 ETEC_sev_params <- list(
   score_params   = ETEC_score_params,
   gems_params    = ETEC_gems_params,
+  culture_params = ETEC_culture_params,
   ref_agegrp     = levels(sev.df$agegrp)[1],
   ref_country    = levels(sev.df$country_id)[1]
 )
 
 saveRDS(ETEC_sev_params, here::here("sim param data","ETEC_severity.RDS"))
-
-
 
 # Other diarrhea severity ----
 
