@@ -29,6 +29,8 @@ struct CAKeyHash {
 struct IRParams {
   double ir_shigella;
   double vax_ir_shigella;
+  double ir_ETEC;
+  double vax_ir_ETEC;
   double ir_other;
 };
 
@@ -37,7 +39,14 @@ struct ScoreParams {
   double sd_score;
 };
 
-struct SubclinParams {
+struct ShigSubclinParams {
+  double pred_prob_0;      // prev_diarrhea == 0
+  double pred_prob_1;      // prev_diarrhea == 1
+  double vax_pred_prob_0;
+  double vax_pred_prob_1;
+};
+
+struct ETECSubclinParams {
   double pred_prob_0;      // prev_diarrhea == 0
   double pred_prob_1;      // prev_diarrhea == 1
   double vax_pred_prob_0;
@@ -76,6 +85,12 @@ struct ShigQtyParams {
   double shape_quantity;  // Gamma shape parameter (1/dispersion), constant across cells
 };
 
+struct ETECQtyParams {
+  double mean_quantity;
+  double vax_mean_quantity;
+  double shape_quantity;  // Gamma shape parameter (1/dispersion), constant across cells
+};
+
 struct OtherQtyParams {
   double mean_quantity;
   double shape_quantity;  // Gamma shape parameter (1/dispersion), constant across cells
@@ -91,11 +106,13 @@ build_ir_map(DataFrame data) {
   CharacterVector country_ids   = data["country_id"];
   CharacterVector agegrps       = data["agegrp"];
   NumericVector ir_shig         = data["IR_shigella"];
+  NumericVector ir_ETEC         = data["IR_ETEC"];
   NumericVector ir_other        = data["IR_other"];
   NumericVector vax_ir_shig     = data["vax_IR_shigella"];
+  NumericVector vax_ir_ETEC     = data["vax_IR_ETEC"];
   for (int i = 0; i < country_ids.size(); i++) {
     CAKey k{as<std::string>(country_ids[i]), as<std::string>(agegrps[i])};
-    m[k] = {ir_shig[i], vax_ir_shig[i], ir_other[i]};
+    m[k] = {ir_shig[i], vax_ir_shig[i], ir_ETEC[i], vax_ir_ETEC[i], ir_other[i]};
   }
   return m;
 }
@@ -114,9 +131,9 @@ build_score_map(DataFrame data) {
   return m;
 }
 
-std::unordered_map<CAKey, SubclinParams, CAKeyHash>
-build_subclin_map(DataFrame data) {
-  std::unordered_map<CAKey, SubclinParams, CAKeyHash> m;
+std::unordered_map<CAKey, ShigSubclinParams, CAKeyHash>
+build_shig_subclin_map(DataFrame data) {
+  std::unordered_map<CAKey, ShigSubclinParams, CAKeyHash> m;
   CharacterVector country_ids  = data["country_id"];
   CharacterVector agegrps      = data["agegrp"];
   IntegerVector prev_diar      = data["prev.diarrhea"];
@@ -136,6 +153,29 @@ build_subclin_map(DataFrame data) {
   }
   return m;
 }
+
+std::unordered_map<CAKey, ETECSubclinParams, CAKeyHash>
+  build_ETEC_subclin_map(DataFrame data) {
+    std::unordered_map<CAKey, ETECSubclinParams, CAKeyHash> m;
+    CharacterVector country_ids  = data["country_id"];
+    CharacterVector agegrps      = data["agegrp"];
+    IntegerVector prev_diar      = data["prev.diarrhea"];
+    NumericVector pred_prob      = data["predicted_prob"];
+    NumericVector vax_pred_prob  = data["vax_predicted_prob"];
+    // initialise all entries so both prev_diarrhea values land in the same struct
+    for (int i = 0; i < country_ids.size(); i++) {
+      CAKey k{as<std::string>(country_ids[i]), as<std::string>(agegrps[i])};
+      auto& entry = m[k];
+      if (prev_diar[i] == 0) {
+        entry.pred_prob_0     = pred_prob[i];
+        entry.vax_pred_prob_0 = vax_pred_prob[i];
+      } else {
+        entry.pred_prob_1     = pred_prob[i];
+        entry.vax_pred_prob_1 = vax_pred_prob[i];
+      }
+    }
+    return m;
+  }
 
 std::unordered_map<CAKey, OtherSubParams, CAKeyHash>
 build_other_sub_map(DataFrame data) {
@@ -173,6 +213,24 @@ build_shig_quantity_map(DataFrame data) {
   }
   return m;
 }
+
+
+std::unordered_map<QtyKey, ETECQtyParams, QtyKeyHash>
+  build_ETEC_quantity_map(DataFrame data) {
+    std::unordered_map<QtyKey, ETECQtyParams, QtyKeyHash> m;
+    CharacterVector country_ids    = data["country_id"];
+    CharacterVector agegrps        = data["agegrp"];
+    CharacterVector severities     = data["severity"];
+    NumericVector mean_quantity      = data["mean_quantity"];
+    NumericVector shape_quantity     = data["shape_quantity"];
+    NumericVector vax_mean_quantity  = data["vax_mean_quantity"];
+    for (int i = 0; i < country_ids.size(); i++) {
+      QtyKey k{as<std::string>(country_ids[i]), as<std::string>(agegrps[i]),
+               as<std::string>(severities[i])};
+      m[k] = {mean_quantity[i], vax_mean_quantity[i], shape_quantity[i]};
+    }
+    return m;
+  }
 
 std::unordered_map<QtyKey, OtherQtyParams, QtyKeyHash>
 build_other_quantity_map(DataFrame data) {
@@ -292,42 +350,58 @@ inline double logodds_from_coefs(const NumericVector& coefs,
 DataFrame simulate_trial(int n_children, int n_months, CharacterVector countries,
                          DataFrame diarrhea_ir,
                          DataFrame shigella_sub,
+                         DataFrame ETEC_sub,
                          DataFrame other_sub,
-                         List sev_params,
+                         List shigella_sev_params,
+                         List ETEC_sev_params,
                          List other_sev_params,
                          DataFrame shigella_quantity,
+                         DataFrame ETEC_quantity,
                          DataFrame other_quantity) {
 
   // --- Unpack GLM coef vectors and their names (tiny, just copy once) ---
-  List      gems_params    = as<List>(sev_params["gems_params"]);
-  List      culture_params = as<List>(sev_params["culture_params"]);
-  List      other_gems_p   = as<List>(other_sev_params["gems_params"]);
-  NumericVector gems_coefs       = gems_params["coefs"];
-  NumericVector culture_coefs    = culture_params["coefs"];
-  NumericVector other_gems_coefs = other_gems_p["coefs"];
+  List      shig_gems_params    = as<List>(shigella_sev_params["gems_params"]);
+  List      shig_culture_params = as<List>(shigella_sev_params["culture_params"]);
+  List      ETEC_gems_params    = as<List>(ETEC_sev_params["gems_params"]);
+  List      ETEC_culture_params = as<List>(ETEC_sev_params["culture_params"]);
+  List      other_gems_p        = as<List>(other_sev_params["gems_params"]);
+  NumericVector shigella_gems_coefs       = shig_gems_params["coefs"];
+  NumericVector shigella_culture_coefs    = shig_culture_params["coefs"];
+  NumericVector ETEC_gems_coefs           = ETEC_gems_params["coefs"];
+  NumericVector ETEC_culture_coefs        = ETEC_culture_params["coefs"];
+  NumericVector other_gems_coefs          = other_gems_p["coefs"];
   // Named vectors: extract names for robust positional lookup
-  CharacterVector gems_names       = as<CharacterVector>(
-    as<NumericVector>(gems_params["coefs"]).attr("names"));
-  CharacterVector culture_names    = as<CharacterVector>(
-    as<NumericVector>(culture_params["coefs"]).attr("names"));
+  CharacterVector shig_gems_names       = as<CharacterVector>(
+    as<NumericVector>(shig_gems_params["coefs"]).attr("names"));
+  CharacterVector shig_culture_names    = as<CharacterVector>(
+    as<NumericVector>(shig_culture_params["coefs"]).attr("names"));
+  CharacterVector ETEC_gems_names       = as<CharacterVector>(
+    as<NumericVector>(ETEC_gems_params["coefs"]).attr("names"));
+  CharacterVector ETEC_culture_names    = as<CharacterVector>(
+    as<NumericVector>(ETEC_culture_params["coefs"]).attr("names"));
   CharacterVector other_gems_names = as<CharacterVector>(
     as<NumericVector>(other_gems_p["coefs"]).attr("names"));
 
   // --- Build all lookup maps once ---
-  auto ir_map        = build_ir_map(diarrhea_ir);
-  auto score_map     = build_score_map(as<DataFrame>(sev_params["score_params"]));
-  auto other_sc_map  = build_score_map(as<DataFrame>(other_sev_params["score_params"]));
-  auto subclin_map   = build_subclin_map(shigella_sub);
-  auto other_sub_map = build_other_sub_map(other_sub);
-  auto shig_qty_map  = build_shig_quantity_map(shigella_quantity);
-  auto other_qty_map = build_other_quantity_map(other_quantity);
+  auto ir_map             = build_ir_map(diarrhea_ir);
+  auto shig_score_map     = build_score_map(as<DataFrame>(shigella_sev_params["score_params"]));
+  auto ETEC_score_map     = build_score_map(as<DataFrame>(ETEC_sev_params["score_params"]));
+  auto other_sc_map       = build_score_map(as<DataFrame>(other_sev_params["score_params"]));
+  auto shig_sub_map       = build_shig_subclin_map(shigella_sub);
+  auto ETEC_sub_map       = build_ETEC_subclin_map(ETEC_sub);
+  auto other_sub_map      = build_other_sub_map(other_sub);
+  auto shig_qty_map       = build_shig_quantity_map(shigella_quantity);
+  auto ETEC_qty_map       = build_ETEC_quantity_map(ETEC_quantity);
+  auto other_qty_map      = build_other_quantity_map(other_quantity);
 
   // Calibrated severity-dependent VE shrinkage parameter (single scalar,
   // computed once per scenario in f.param() / calibrate_ve_max()).
   // Defaults to 0 (no shrinkage) if not present, e.g. for other_sev_params
   // which has no vax effect.
-  double ve_max = sev_params.containsElementNamed("ve_max") ?
-                  as<double>(sev_params["ve_max"]) : 0.0;
+  double shig_ve_max = shigella_sev_params.containsElementNamed("ve_max") ?
+                  as<double>(shigella_sev_params["ve_max"]) : 0.0;
+  double ETEC_ve_max = ETEC_sev_params.containsElementNamed("ve_max") ?
+                  as<double>(ETEC_sev_params["ve_max"]) : 0.0;
 
   int n_rows = n_children * n_months * countries.size();
 
@@ -338,16 +412,23 @@ DataFrame simulate_trial(int n_children, int n_months, CharacterVector countries
   CharacterVector agegrp_out(n_rows);
   IntegerVector   vax_out(n_rows);
   IntegerVector   shigella_diarrhea(n_rows);
+  IntegerVector   ETEC_diarrhea(n_rows);
   IntegerVector   other_diarrhea(n_rows);
   IntegerVector   shigella_score(n_rows);
   IntegerVector   shigella_gemsmsd(n_rows);
   IntegerVector   shigella_culture(n_rows);
   CharacterVector shigella_any_severity(n_rows);
+  IntegerVector   ETEC_score(n_rows);
+  IntegerVector   ETEC_gemsmsd(n_rows);
+  IntegerVector   ETEC_culture(n_rows);
+  CharacterVector ETEC_any_severity(n_rows);
   IntegerVector   other_score(n_rows);
   IntegerVector   other_gemsmsd(n_rows);
   CharacterVector other_any_severity(n_rows);
   IntegerVector   shigella_subclin(n_rows);
   DoubleVector    shig_quantity_out(n_rows);
+  IntegerVector   ETEC_subclin(n_rows);
+  DoubleVector    ETEC_quantity_out(n_rows);
   IntegerVector   other_inf(n_rows);
   DoubleVector    other_quantity_out(n_rows);
 
@@ -372,21 +453,23 @@ DataFrame simulate_trial(int n_children, int n_months, CharacterVector countries
         // --- Diarrhea events (map lookup, O(1)) ---
         const auto& ir = ir_map.at({country, ag});
         double ir_shig = (vax_status == 1) ? ir.vax_ir_shigella : ir.ir_shigella;
+        double ir_ETEC = (vax_status == 1) ? ir.vax_ir_ETEC : ir.ir_ETEC;
         shigella_diarrhea[index] = diarrhea_event(ir_shig);
+        ETEC_diarrhea[index] = diarrhea_event(ir_ETEC);
         other_diarrhea[index]    = diarrhea_event(ir.ir_other);
 
         // --- Shigella severity chain: score -> gemsdef (culture moved below,
         // after Ct is known, since the new unified culture model depends on
         // the drawn Ct value rather than gemsdef status) ---
         if (shigella_diarrhea[index] == 1) {
-          const auto& sp = score_map.at({country, ag});
+          const auto& sp = shig_score_map.at({country, ag});
           double drawn_score = std::round(
             std::min(std::max(R::rnorm(sp.mean_score, sp.sd_score), 1.0), 12.0));
           double s_score = (vax_status == 1) ?
-            shrink_score(drawn_score, ve_max) : drawn_score;
+            shrink_score(drawn_score, shig_ve_max) : drawn_score;
           shigella_score[index] = static_cast<int>(s_score);
 
-          double lp_gems = logodds_from_coefs(gems_coefs, gems_names, ag, country, "score", s_score);
+          double lp_gems = logodds_from_coefs(shigella_gems_coefs, shig_gems_names, ag, country, "score", s_score);
           int s_gems = static_cast<int>(R::rbinom(1, 1.0 / (1.0 + std::exp(-lp_gems))));
           shigella_gemsmsd[index] = s_gems;
 
@@ -396,6 +479,29 @@ DataFrame simulate_trial(int n_children, int n_months, CharacterVector countries
           shigella_score[index]        = NA_INTEGER;
           shigella_gemsmsd[index]      = NA_INTEGER;
           shigella_any_severity[index] = NA_STRING;
+        }
+        
+        // --- ETEC severity chain: score -> gemsdef (culture moved below,
+        // after Ct is known, since the new unified culture model depends on
+        // the drawn Ct value rather than gemsdef status) ---
+        if (ETEC_diarrhea[index] == 1) {
+          const auto& sp = ETEC_score_map.at({country, ag});
+          double drawn_score = std::round(
+            std::min(std::max(R::rnorm(sp.mean_score, sp.sd_score), 1.0), 12.0));
+          double s_score = (vax_status == 1) ?
+          shrink_score(drawn_score, ETEC_ve_max) : drawn_score;
+          ETEC_score[index] = static_cast<int>(s_score);
+          
+          double lp_gems = logodds_from_coefs(ETEC_gems_coefs, ETEC_gems_names, ag, country, "score", s_score);
+          int s_gems = static_cast<int>(R::rbinom(1, 1.0 / (1.0 + std::exp(-lp_gems))));
+          ETEC_gemsmsd[index] = s_gems;
+          
+          ETEC_any_severity[index] =
+            (s_score >= 6 || s_gems == 1) ? "Severe" : "Mild";
+        } else {
+          ETEC_score[index]        = NA_INTEGER;
+          ETEC_gemsmsd[index]      = NA_INTEGER;
+          ETEC_any_severity[index] = NA_STRING;
         }
 
         // --- Other diarrhea severity ---
@@ -418,17 +524,17 @@ DataFrame simulate_trial(int n_children, int n_months, CharacterVector countries
         }
 
         // --- Subclinical shigella (PCR detection, no diarrhea) ---
-        int prev_diarrhea = (m > 1 &&
+        int shig_prev_diarrhea = (m > 1 &&
           !IntegerVector::is_na(shigella_diarrhea[index - 1]) &&
           shigella_diarrhea[index - 1] == 1) ? 1 : 0;
 
-        const auto& sc = subclin_map.at({country, ag});
-        double sc_prob = (vax_status == 1) ?
-          (prev_diarrhea == 1 ? sc.vax_pred_prob_1 : sc.vax_pred_prob_0) :
-          (prev_diarrhea == 1 ? sc.pred_prob_1     : sc.pred_prob_0);
-        shigella_subclin[index] = (NumericVector::is_na(sc_prob) || sc_prob < 0 ||
-                                    sc_prob > 1) ? 0 :
-                                    static_cast<int>(R::rbinom(1, sc_prob));
+        const auto& shig_sc = shig_sub_map.at({country, ag});
+        double shig_sc_prob = (vax_status == 1) ?
+          (shig_prev_diarrhea == 1 ? shig_sc.vax_pred_prob_1 : shig_sc.vax_pred_prob_0) :
+          (shig_prev_diarrhea == 1 ? shig_sc.pred_prob_1     : shig_sc.pred_prob_0);
+        shigella_subclin[index] = (NumericVector::is_na(shig_sc_prob) || shig_sc_prob < 0 ||
+          shig_sc_prob > 1) ? 0 :
+                                    static_cast<int>(R::rbinom(1, shig_sc_prob));
 
         // --- Shigella pathogen quantity: drawn for ANY PCR-detectable
         // Shigella this month (clinical diarrhea OR subclinical detection)
@@ -475,13 +581,82 @@ DataFrame simulate_trial(int n_children, int n_months, CharacterVector countries
           double shig_diar_flag = (shigella_diarrhea[index] == 1) ? 1.0 : 0.0;
           double ct_for_culture = quantity_to_ct(shig_quantity_out[index]);
           double lp_cult = logodds_from_coefs(
-            culture_coefs, culture_names, ag, country,
+            shigella_culture_coefs, shig_culture_names, ag, country,
             std::vector<std::string>{"shigella_eiec", "shig.diar"},
             std::vector<double>{ct_for_culture, shig_diar_flag}
           );
           shigella_culture[index] = static_cast<int>(
             R::rbinom(1, 1.0 / (1.0 + std::exp(-lp_cult))));
         }
+        
+        
+        // --- Subclinical ETEC (PCR detection, no diarrhea) ---
+        int ETEC_prev_diarrhea = (m > 1 &&
+                             !IntegerVector::is_na(ETEC_diarrhea[index - 1]) &&
+                             ETEC_diarrhea[index - 1] == 1) ? 1 : 0;
+        
+        const auto& ETEC_sc = ETEC_sub_map.at({country, ag});
+        double ETEC_sc_prob = (vax_status == 1) ?
+        (ETEC_prev_diarrhea == 1 ? ETEC_sc.vax_pred_prob_1 : ETEC_sc.vax_pred_prob_0) :
+          (ETEC_prev_diarrhea == 1 ? ETEC_sc.pred_prob_1     : ETEC_sc.pred_prob_0);
+        ETEC_subclin[index] = (NumericVector::is_na(ETEC_sc_prob) || ETEC_sc_prob < 0 ||
+          ETEC_sc_prob > 1) ? 0 :
+          static_cast<int>(R::rbinom(1, ETEC_sc_prob));
+        
+        // --- ETEC pathogen quantity: drawn for ANY PCR-detectable
+        // ETEC this month (clinical diarrhea OR subclinical detection)
+        // — must come before culture status since the unified culture
+        // model uses Ct (converted from quantity) directly. Drawn from a
+        // Gamma distribution (shape/scale parameterization, scale =
+        // mean/shape) fit per country x agegrp x severity cell — see
+        // 0-estimate-params.R. Quantity is clamped at a strict lower bound
+        // (>0, via a small positive floor, since simulating an actual
+        // infection implies quantity > 0) AND at MAX_QUANTITY (Ct >= 0),
+        // since the Gamma model itself has no natural upper bound.
+        ETEC_quantity_out[index] = NA_REAL;
+        bool ETEC_pcr_positive = false;
+        
+        if (ETEC_diarrhea[index] == 1 &&
+            !CharacterVector::is_na(ETEC_any_severity[index])) {
+            std::string sev_str = as<std::string>(ETEC_any_severity[index]);
+          auto it = ETEC_qty_map.find({country, ag, sev_str});
+          if (it != ETEC_qty_map.end()) {
+            double mu_qty = (vax_status == 1) ? it->second.vax_mean_quantity : it->second.mean_quantity;
+            double shape  = it->second.shape_quantity;
+            double drawn_qty = R::rgamma(shape, mu_qty / shape);
+            ETEC_quantity_out[index] = std::min(MAX_QUANTITY, std::max(1e-6, drawn_qty));
+            ETEC_pcr_positive = true;
+          }
+        } else if (ETEC_subclin[index] == 1) {
+          auto it = ETEC_qty_map.find({country, ag, "Subclinical"});
+          if (it != ETEC_qty_map.end()) {
+            double mu_qty = (vax_status == 1) ? it->second.vax_mean_quantity : it->second.mean_quantity;
+            double shape  = it->second.shape_quantity;
+            double drawn_qty = R::rgamma(shape, mu_qty / shape);
+            ETEC_quantity_out[index] = std::min(MAX_QUANTITY, std::max(1e-6, drawn_qty));
+            ETEC_pcr_positive = true;
+          }
+        }
+        
+        // --- ETEC culture: unified model across ALL PCR-positive
+        // specimens (clinical or subclinical), predicted from agegrp,
+        // country, the drawn Ct value (converted from quantity), and
+        // ETEC.diar status. Replaces the old two-path approach
+        // (gemsdef-based for clinical, agegrp-only for subclinical).
+        ETEC_culture[index] = NA_INTEGER;
+        if (ETEC_pcr_positive) {
+          double ETEC_diar_flag = (ETEC_diarrhea[index] == 1) ? 1.0 : 0.0;
+          double ct_for_culture = quantity_to_ct(ETEC_quantity_out[index]);
+          double lp_cult = logodds_from_coefs(
+            ETEC_culture_coefs, ETEC_culture_names, ag, country,
+            std::vector<std::string>{"ST_ETEC", "ETEC.diar"},
+            std::vector<double>{ct_for_culture, ETEC_diar_flag}
+          );
+          ETEC_culture[index] = static_cast<int>(
+            R::rbinom(1, 1.0 / (1.0 + std::exp(-lp_cult))));
+        }
+        
+        
 
         // --- Other pathogen detection and quantity ---
         // Detection probability now depends on other_diarrhea, mirroring
@@ -530,16 +705,23 @@ DataFrame simulate_trial(int n_children, int n_months, CharacterVector countries
     Named("agegrp")                = agegrp_out,
     Named("vax")                   = vax_out,
     Named("shigella_diarrhea")     = shigella_diarrhea,
+    Named("ETEC_diarrhea")         = ETEC_diarrhea,
     Named("other_diarrhea")        = other_diarrhea,
     Named("shigella_score")        = shigella_score,
     Named("shigella_gemsmsd")      = shigella_gemsmsd,
     Named("shigella_culture")      = shigella_culture,
     Named("shigella_any_severity") = shigella_any_severity,
+    Named("ETEC_score")            = ETEC_score,
+    Named("ETEC_gemsmsd")          = ETEC_gemsmsd,
+    Named("ETEC_culture")          = ETEC_culture,
+    Named("ETEC_any_severity")     = ETEC_any_severity,
     Named("other_score")           = other_score,
     Named("other_gemsmsd")         = other_gemsmsd,
     Named("other_any_severity")    = other_any_severity,
     Named("shigella_sub")          = shigella_subclin,
     Named("shigella_quantity")     = shig_quantity_out,
+    Named("ETEC_sub")              = ETEC_subclin,
+    Named("ETEC_quantity")         = ETEC_quantity_out,
     Named("other_inf")             = other_inf,
     Named("other_quantity")        = other_quantity_out
   );

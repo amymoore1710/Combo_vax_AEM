@@ -36,23 +36,29 @@ within_sim_summarise <- function(raw, sim_id) {
   df <- raw %>%
     mutate(
       sim              = sim_id,
-      diarrhea         = ifelse(shigella_diarrhea == 1 | other_diarrhea == 1, 1, 0),
+      diarrhea         = ifelse(shigella_diarrhea == 1 | ETEC_diarrhea == 1 | other_diarrhea == 1, 1, 0),
       # convert simulated pathogen quantity to Ct for endpoint thresholds
       # (quantity is simulated directly to avoid Ct truncation — see
       # quantity_to_ct() in 2-functions.cpp/2-functions.R for rationale)
       shigella_ct      = ifelse(is.na(shigella_quantity), 35, 35 - 3.322 * shigella_quantity),
+      ETEC_ct          = ifelse(is.na(ETEC_quantity),     35, 35 - 3.322 * ETEC_quantity),
       other_ct         = ifelse(is.na(other_quantity),    35, 35 - 3.322 * other_quantity),
       shigella_score   = ifelse(is.na(shigella_score),    0, shigella_score),
+      ETEC_score       = ifelse(is.na(ETEC_score),        0, ETEC_score),
       other_score      = ifelse(is.na(other_score),       0, other_score),
       shigella_gemsmsd = ifelse(is.na(shigella_gemsmsd),  0, shigella_gemsmsd),
+      ETEC_gemsmsd     = ifelse(is.na(ETEC_gemsmsd),      0, ETEC_gemsmsd),
       other_gemsmsd    = ifelse(is.na(other_gemsmsd),     0, other_gemsmsd),
       shigella_culture = ifelse(is.na(shigella_culture),  0, shigella_culture),
+      ETEC_culture     = ifelse(is.na(ETEC_culture),      0, ETEC_culture),
       sev.score.diarrhea          = ifelse(diarrhea == 1 &
                                              (shigella_score >= 6 | other_score >= 6), 1, 0),
       sev.gems.diarrhea           = ifelse(diarrhea == 1 &
                                              (shigella_gemsmsd == 1 | other_gemsmsd == 1), 1, 0),
       sev.score.shigella_diarrhea = ifelse(shigella_diarrhea == 1 & shigella_score >= 6, 1, 0),
       sev.gems.shigella_diarrhea  = ifelse(shigella_diarrhea == 1 & shigella_gemsmsd == 1, 1, 0),
+      sev.score.ETEC_diarrhea     = ifelse(ETEC_diarrhea == 1 & ETEC_score >= 6, 1, 0),
+      sev.gems.ETEC_diarrhea      = ifelse(ETEC_diarrhea == 1 & ETEC_gemsmsd == 1, 1, 0),
       endpt1             = ifelse(diarrhea == 1 & shigella_ct < 35, 1, 0),
       endpt2.1           = ifelse(diarrhea == 1 & shigella_ct < 28.8, 1, 0),
       endpt2.2           = ifelse(diarrhea == 1 & shigella_ct < 30.4, 1, 0),
@@ -368,3 +374,56 @@ f.aggregate_ve <- function(pt_list, super_true_ve, analytic_true_ve) {
 
   list(incidence = inc_df, risk = risk_df, ve = ve_out)
 }
+
+endpoint_creation <- function(raw) {
+  # --- derive endpoint columns ---
+  df <- raw %>%
+    mutate(
+      sim              = sim,
+      diarrhea         = ifelse(shigella_diarrhea == 1 | ETEC_diarrhea == 1 | other_diarrhea == 1, 1, 0),
+      # convert simulated pathogen quantity to Ct for endpoint thresholds
+      # (quantity is simulated directly to avoid Ct truncation — see
+      # quantity_to_ct() in 2-functions.cpp/2-functions.R for rationale)
+      shigella_ct      = ifelse(is.na(shigella_quantity), 35, 35 - 3.322 * shigella_quantity),
+      ETEC_ct          = ifelse(is.na(ETEC_quantity),     35, 35 - 3.322 * ETEC_quantity),
+      other_ct         = ifelse(is.na(other_quantity),    35, 35 - 3.322 * other_quantity),
+      shigella_score   = ifelse(is.na(shigella_score),    0, shigella_score),
+      ETEC_score       = ifelse(is.na(ETEC_score),        0, ETEC_score),
+      other_score      = ifelse(is.na(other_score),       0, other_score),
+      shigella_gemsmsd = ifelse(is.na(shigella_gemsmsd),  0, shigella_gemsmsd),
+      ETEC_gemsmsd     = ifelse(is.na(ETEC_gemsmsd),      0, ETEC_gemsmsd),
+      other_gemsmsd    = ifelse(is.na(other_gemsmsd),     0, other_gemsmsd),
+      shigella_culture = ifelse(is.na(shigella_culture),  0, shigella_culture),
+      ETEC_culture     = ifelse(is.na(ETEC_culture),      0, ETEC_culture),
+      sev.score.diarrhea          = ifelse(diarrhea == 1 &
+                                             (shigella_score >= 6 | ETEC_score >= 6 | other_score >= 6), 1, 0),
+      sev.gems.diarrhea           = ifelse(diarrhea == 1 &
+                                             (shigella_gemsmsd == 1 | ETEC_gemsmsd == 1| other_gemsmsd == 1), 1, 0),
+      sev.score.shigella_diarrhea = ifelse(shigella_diarrhea == 1 & shigella_score >= 6, 1, 0),
+      sev.gems.shigella_diarrhea  = ifelse(shigella_diarrhea == 1 & shigella_gemsmsd == 1, 1, 0),
+      sev.score.ETEC_diarrhea     = ifelse(ETEC_diarrhea == 1 & ETEC_score >= 6, 1, 0),
+      sev.gems.ETEC_diarrhea      = ifelse(ETEC_diarrhea == 1 & ETEC_gemsmsd == 1, 1, 0),
+      shigella_afe_beta_param = case_when(country_id == "BG" ~ shigella_afe_beta[1],
+                                          country_id == "IN" ~ shigella_afe_beta[2],
+                                          country_id == "PE" ~ shigella_afe_beta[3],
+                                          country_id == "PK" ~ shigella_afe_beta[4]),
+      ETEC_afe_beta_param = case_when(country_id == "BG" ~ ETEC_afe_beta[1],
+                                      country_id == "IN" ~ ETEC_afe_beta[2],
+                                      country_id == "PE" ~ ETEC_afe_beta[3],
+                                      country_id == "PK" ~ ETEC_afe_beta[4]),
+      other_afe_beta_param = case_when(country_id == "BG" ~ other_afe_beta[1],
+                                       country_id == "IN" ~ other_afe_beta[2],
+                                       country_id == "PE" ~ other_afe_beta[3],
+                                       country_id == "PK" ~ other_afe_beta[4]),
+      shigella_afe = 1 - exp(shigella_afe_beta_param * (35 - shigella_ct)),
+      ETEC_afe = 1 - exp(ETEC_afe_beta_param * (35 - ETEC_ct)),
+      other_afe = 1 - exp(other_afe_beta_param * (35 - other_ct))
+    )
+  
+  return(df)
+}
+  
+  
+  
+  
+  

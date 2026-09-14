@@ -41,6 +41,12 @@ ETEC_quantity <- readRDS(here::here("sim param data","ETEC_quantity.RDS"))
 ## see quantity_to_ct() conversion formula in 2-functions.cpp/2-functions.R)
 other_quantity <- readRDS(here::here("sim param data","other_quantity.RDS"))
 
+# Ct to AFE parameters ----
+shigella_afe_beta <- readRDS(here::here("sim param data", "shigella_afe_beta.RDS"))
+ETEC_afe_beta <- readRDS(here::here("sim param data", "ETEC_afe_beta.RDS"))
+other_afe_beta <- readRDS(here::here("sim param data", "other_afe_beta.RDS"))
+
+
 # Vaccine efficacy assumptions ----
 ve_infection_shig <- 0.10  # 10% VE against infection
 ve_disease_shig   <- 0.40  # 40% VE against disease
@@ -712,6 +718,9 @@ f.param <- function(ve_infection_shig,
     other_sev_params     = other_sev_params_out,
     shigella_quantity    = shigella_quantity_out,
     ETEC_quantity        = ETEC_quantity_out,
-    other_quantity       = other_quantity
+    other_quantity       = other_quantity,
+    shigella_afe_beta    = shigella_afe_beta,
+    ETEC_afe_beta        = ETEC_afe_beta,
+    other_afe_beta       = other_afe_beta
   ))
 }
