@@ -28,8 +28,8 @@ message("Done.\n")
 # n_children    <- 20000
 # chunk_size    <- 100
 
-n_simulations <- 100
-n_children    <- 1000
+n_simulations <- 10
+n_children    <- 100
 chunk_size    <- 0 
 
 
@@ -190,43 +190,44 @@ rm(test_raw)
 # VE scenario definitions
 # ---------------------------------------------------------------
 
+
 ve_params_list <- list(
-  list(ve_infection_shig = 0.0, ve_disease_shig = 0.10, 
-       ve_severity_shig = 0.0, ve_ct_shig = 0.12,
-       ve_infection_ETEC = 0.0, ve_disease_ETEC = 0.10, 
-       ve_severity_ETEC = 0.0, ve_ct_ETEC = 0.12),
-  list(ve_infection_shig = 0.0, ve_disease_shig = 0.20, 
-       ve_severity_shig = 0.0, ve_ct_shig = 0.12,
-       ve_infection_ETEC = 0.0, ve_disease_ETEC = 0.20, 
-       ve_severity_ETEC = 0.0, ve_ct_ETEC = 0.12),
-  list(ve_infection_shig = 0.0, ve_disease_shig = 0.30, 
-       ve_severity_shig = 0.0, ve_ct_shig = 0.12,
-       ve_infection_ETEC = 0.0, ve_disease_ETEC = 0.30, 
-       ve_severity_ETEC = 0.0, ve_ct_ETEC = 0.12),
-  list(ve_infection_shig = 0.0, ve_disease_shig = 0.40, 
-       ve_severity_shig = 0.0, ve_ct_shig = 0.12,
-       ve_infection_ETEC = 0.0, ve_disease_ETEC = 0.40, 
-       ve_severity_ETEC = 0.0, ve_ct_ETEC = 0.12),
-  list(ve_infection_shig = 0.0, ve_disease_shig = 0.50, 
-       ve_severity_shig = 0.0, ve_ct_shig = 0.12,
-       ve_infection_ETEC = 0.0, ve_disease_ETEC = 0.50, 
-       ve_severity_ETEC = 0.0, ve_ct_ETEC = 0.12),
-  list(ve_infection_shig = 0.0, ve_disease_shig = 0.60, 
-       ve_severity_shig = 0.0, ve_ct_shig = 0.12,
-       ve_infection_ETEC = 0.0, ve_disease_ETEC = 0.60, 
-       ve_severity_ETEC = 0.0, ve_ct_ETEC = 0.12),
-  list(ve_infection_shig = 0.0, ve_disease_shig = 0.70, 
-       ve_severity_shig = 0.0, ve_ct_shig = 0.12,
-       ve_infection_ETEC = 0.0, ve_disease_ETEC = 0.70, 
-       ve_severity_ETEC = 0.0, ve_ct_ETEC = 0.12),
-  list(ve_infection_shig = 0.0, ve_disease_shig = 0.80, 
-       ve_severity_shig = 0.0, ve_ct_shig = 0.12,
-       ve_infection_ETEC = 0.0, ve_disease_ETEC = 0.80, 
-       ve_severity_ETEC = 0.0, ve_ct_ETEC = 0.12),
-  list(ve_infection_shig = 0.0, ve_disease_shig = 0.90, 
-       ve_severity_shig = 0.0, ve_ct_shig = 0.12,
-       ve_infection_ETEC = 0.0, ve_disease_ETEC = 0.90, 
-       ve_severity_ETEC = 0.0, ve_ct_ETEC = 0.12)
+  list(ve_infection_shig = 0.10, ve_disease_shig = 0.10, 
+       ve_severity_shig = 0.15, ve_ct_shig = 0.12,
+       ve_infection_ETEC = 0.10, ve_disease_ETEC = 0.10, 
+       ve_severity_ETEC = 0.15, ve_ct_ETEC = 0.12),
+  list(ve_infection_shig = 0.10, ve_disease_shig = 0.20, 
+       ve_severity_shig = 0.25, ve_ct_shig = 0.12,
+       ve_infection_ETEC = 0.10, ve_disease_ETEC = 0.20, 
+       ve_severity_ETEC = 0.25, ve_ct_ETEC = 0.12),
+  list(ve_infection_shig = 0.10, ve_disease_shig = 0.30, 
+       ve_severity_shig = 0.35, ve_ct_shig = 0.12,
+       ve_infection_ETEC = 0.10, ve_disease_ETEC = 0.30, 
+       ve_severity_ETEC = 0.35, ve_ct_ETEC = 0.12),
+  list(ve_infection_shig = 0.10, ve_disease_shig = 0.40, 
+       ve_severity_shig = 0.45, ve_ct_shig = 0.12,
+       ve_infection_ETEC = 0.10, ve_disease_ETEC = 0.40, 
+       ve_severity_ETEC = 0.45, ve_ct_ETEC = 0.12),
+  list(ve_infection_shig = 0.10, ve_disease_shig = 0.50, 
+       ve_severity_shig = 0.55, ve_ct_shig = 0.12,
+       ve_infection_ETEC = 0.10, ve_disease_ETEC = 0.50, 
+       ve_severity_ETEC = 0.55, ve_ct_ETEC = 0.12),
+  list(ve_infection_shig = 0.10, ve_disease_shig = 0.60, 
+       ve_severity_shig = 0.65, ve_ct_shig = 0.12,
+       ve_infection_ETEC = 0.10, ve_disease_ETEC = 0.60, 
+       ve_severity_ETEC = 0.65, ve_ct_ETEC = 0.12),
+  list(ve_infection_shig = 0.10, ve_disease_shig = 0.70, 
+       ve_severity_shig = 0.75, ve_ct_shig = 0.12,
+       ve_infection_ETEC = 0.10, ve_disease_ETEC = 0.70, 
+       ve_severity_ETEC = 0.75, ve_ct_ETEC = 0.12),
+  list(ve_infection_shig = 0.10, ve_disease_shig = 0.80, 
+       ve_severity_shig = 0.85, ve_ct_shig = 0.12,
+       ve_infection_ETEC = 0.10, ve_disease_ETEC = 0.80, 
+       ve_severity_ETEC = 0.85, ve_ct_ETEC = 0.12),
+  list(ve_infection_shig = 0.10, ve_disease_shig = 0.90, 
+       ve_severity_shig = 0.95, ve_ct_shig = 0.12,
+       ve_infection_ETEC = 0.10, ve_disease_ETEC = 0.90, 
+       ve_severity_ETEC = 0.95, ve_ct_ETEC = 0.12)
 )
 
 dataset_names <- c(
@@ -397,6 +398,9 @@ for (i in seq_along(ve_params_list)) {
   # ve_all[[scenario]]   <- ve_result$ve
   # 
   # rm(ss_rows, pt_rows, ss_result, ve_result); gc()
+  
+  # # Save combined outputs ----
+  saveRDS(simulations, here::here("sim data", paste0(filename, ".RDS")))
 
   total_elapsed   <- (proc.time() - scenario_start)[["elapsed"]]
   overall_elapsed <- (proc.time() - total_start)[["elapsed"]]
