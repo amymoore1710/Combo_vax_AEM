@@ -28,8 +28,8 @@ message("Done.\n")
 # n_children    <- 20000
 # chunk_size    <- 100
 
-n_simulations <- 10
-n_children    <- 100
+n_simulations <- 100
+n_children    <- 1000
 chunk_size    <- 0 
 
 
@@ -253,9 +253,7 @@ for (i in seq_along(ve_params_list)) {
   scenario <- dataset_names[i]
   tag      <- sprintf("VEinf=%.2f / VEdis=%.2f / VEsev=%.2f / VEct=%.2f",
                       ve$ve_infection_shig, ve$ve_disease_shig, ve$ve_severity_shig, ve$ve_ct_shig)
-  filename <- sprintf("sVEinf_%.2f_sVEdis=%.2f_sVEsev=%.2f_sVEct=%.2f_eVEinf_%.2f_eVEdis=%.2f_eVEsev=%.2f_eVEct=%.2f",
-                      ve$ve_infection_shig, ve$ve_disease_shig, ve$ve_severity_shig, ve$ve_ct_shig,
-                      ve$ve_infection_ETEC, ve$ve_disease_ETEC, ve$ve_severity_ETEC, ve$ve_ct_ETEC)
+  filename <- paste0("shigVE_", ve$ve_disease_shig)
 
   message(sprintf("[%d/%d] %s", i, n_scenarios, tag))
   scenario_start <- proc.time()
